@@ -1,0 +1,11 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Raw Telegram exports may contain personal and payment data
+ChatExport_*/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
