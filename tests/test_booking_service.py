@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from dobrolap_bot.config.loader import load_catalog
+from dobrolap_bot.bot.handlers import _accept_receipt
 from dobrolap_bot.domain.enums import BookingStatus, FeedingOption, PetKind
 from dobrolap_bot.domain.models import PetProfile
 from dobrolap_bot.integrations.google_sheets import InMemorySheetsGateway, SheetBooking
@@ -167,5 +169,128 @@ async def test_manual_booking_without_unit(booking_service):
     )
     assert quote is None
     assert booking.deposit_amount == 2000
+    with pytest.raises(ValueError, match="unit_required"):
+        await booking_service.approve(booking.id)
+    booking, _ = await booking_service.suggest_unit(booking.id, "comfort")
     booking = await booking_service.approve(booking.id)
     assert booking.status == BookingStatus.WAITING_PAYMENT
+
+
+@pytest.mark.asyncio
+async def test_legacy_payment_cannot_confirm_without_calendar_slot(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=776, customer_name="A", username=None, consent_at=None,
+        date_from=date(2027, 1, 1), date_to=date(2027, 1, 3), pets=[_pet()],
+        unit_id=None, feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=True,
+    )
+    booking.status = BookingStatus.WAITING_PAYMENT
+    booking.payload["receipt_file_ids"] = ["receipt"]
+    await booking_service.repo.save_booking(booking)
+    with pytest.raises(ValueError, match="unit_required"):
+        await booking_service.confirm_payment(booking.id)
+    assert (await booking_service.get(booking.id)).status == BookingStatus.WAITING_PAYMENT
+
+
+@pytest.mark.asyncio
+async def test_stale_approve_does_not_reserve(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=777, customer_name="A", username=None, consent_at=None,
+        date_from=date(2027, 2, 1), date_to=date(2027, 2, 3), pets=[_pet()],
+        unit_id="comfort", feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=False,
+    )
+    await booking_service.cancel(booking.id)
+    with pytest.raises(InvalidTransitionError):
+        await booking_service.approve(booking.id)
+    assert booking_service.sheets.list_bookings() == []
+
+
+@pytest.mark.asyncio
+async def test_change_after_hold_releases_old_room_and_receipt(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=778, customer_name="A", username=None, consent_at=None,
+        date_from=date(2027, 3, 1), date_to=date(2027, 3, 3), pets=[_pet()],
+        unit_id="comfort", feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+    old_label = booking.payload["sheet_label"]
+    await booking_service.attach_receipt(booking.id, "old-receipt")
+    booking, _ = await booking_service.suggest_unit(booking.id, "comfort_plus")
+    assert booking.payload["sheet_label"] is None
+    assert booking.payload["receipt_file_ids"] == []
+    assert old_label not in booking_service.sheets.occupied_unit_ids(booking.date_from, booking.date_to)
+    booking = await booking_service.approve(booking.id)
+    with pytest.raises(ValueError, match="receipt_required"):
+        await booking_service.confirm_payment(booking.id)
+
+
+@pytest.mark.asyncio
+async def test_failed_release_keeps_booking_active(booking_service, monkeypatch):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=779, customer_name="A", username=None, consent_at=None,
+        date_from=date(2027, 4, 1), date_to=date(2027, 4, 3), pets=[_pet()],
+        unit_id="comfort", feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+
+    def fail_release(**kwargs):
+        raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(booking_service.sheets, "release_booking", fail_release)
+    with pytest.raises(RuntimeError, match="calendar unavailable"):
+        await booking_service.cancel(booking.id)
+    assert (await booking_service.get(booking.id)).status == BookingStatus.WAITING_PAYMENT
+
+
+@pytest.mark.asyncio
+async def test_failed_cancel_save_restores_calendar_hold(booking_service, monkeypatch):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=781, customer_name="A", username=None, consent_at=None,
+        date_from=date(2027, 6, 1), date_to=date(2027, 6, 3), pets=[_pet()],
+        unit_id="comfort", feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+    label = booking.payload["sheet_label"]
+
+    async def fail_save(record):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(booking_service.repo, "save_booking", fail_save)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await booking_service.cancel(booking.id)
+    assert (await booking_service.get(booking.id)).status == BookingStatus.WAITING_PAYMENT
+    assert label in booking_service.sheets.occupied_unit_ids(booking.date_from, booking.date_to)
+
+
+@pytest.mark.asyncio
+async def test_receipt_requires_selection_when_multiple_bookings_wait(booking_service):
+    bookings = []
+    for unit_id in ("comfort", "comfort_plus"):
+        booking, _ = await booking_service.submit_booking(
+            telegram_user_id=780, customer_name="A", username=None, consent_at=None,
+            date_from=date(2027, 5, 1), date_to=date(2027, 5, 3), pets=[_pet()],
+            unit_id=unit_id, feeding=None, service_ids=[], placement_flags=[],
+            manual_matching=False,
+        )
+        bookings.append(await booking_service.approve(booking.id))
+
+    answers = []
+
+    async def answer(text):
+        answers.append(text)
+
+    message = SimpleNamespace(from_user=SimpleNamespace(id=780), answer=answer, bot=None)
+    assert await _accept_receipt(message, booking_service, None, "receipt")
+    assert "несколько заявок" in answers[-1]
+    assert not (await booking_service.get(bookings[0].id)).payload["receipt_file_ids"]
+    assert not (await booking_service.get(bookings[1].id)).payload["receipt_file_ids"]
+
+    assert await _accept_receipt(
+        message, booking_service, None, "receipt", booking_id=bookings[0].id
+    )
+    assert (await booking_service.get(bookings[0].id)).payload["receipt_file_ids"] == ["receipt"]
+    assert not (await booking_service.get(bookings[1].id)).payload["receipt_file_ids"]

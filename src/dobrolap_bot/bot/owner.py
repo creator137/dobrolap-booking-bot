@@ -52,7 +52,11 @@ async def owner_approve(
         booking = await booking_service.approve(booking_id)
     except ValueError as exc:
         msg = str(exc)
-        if "unit_occupied" in msg:
+        if msg == "unit_required":
+            await callback.message.answer(
+                "Сначала выберите помещение кнопкой «Другой вариант», затем подтвердите заявку."
+            )
+        elif "unit_occupied" in msg:
             await callback.message.answer(
                 "Место уже занято в календаре (возможно, вручную). "
                 "Предложите другой вариант или отклоните заявку."
@@ -90,14 +94,22 @@ async def owner_approve(
             "Оплатите залог по инструкции ниже и пришлите чек (фото или PDF):\n\n"
             f"{pay_text}",
         )
-        # Best-effort FSM hint; receipt also accepted via SQLite WAITING_PAYMENT lookup.
+        waiting = await booking_service.repo.list_by_telegram(
+            client_id, statuses=[booking.status]
+        )
+        if len(waiting) > 1:
+            await callback.bot.send_message(
+                client_id,
+                f"У вас несколько заявок на оплату. Перед отправкой чека выберите эту: /receipt {booking_id}",
+            )
+        # Best-effort FSM hint; receipt also accepted via SQLite lookup.
         key = StorageKey(
             bot_id=callback.bot.id,
             chat_id=client_id,
             user_id=client_id,
         )
         await state.storage.set_state(key, BookingForm.waiting_receipt)
-        await state.storage.set_data(key, {"booking_id": booking_id})
+        await state.storage.set_data(key, {"booking_id": booking_id} if len(waiting) == 1 else {})
 
     await callback.answer("Подтверждено")
 
@@ -257,6 +269,8 @@ async def owner_paid(
             await callback.message.answer(
                 "Сначала дождитесь чека от клиента — кнопка сработает после загрузки чека."
             )
+        elif str(exc) == "unit_required":
+            await callback.message.answer("Для этой заявки не выбрано место в календаре. Выберите место и подтвердите заявку заново.")
         else:
             await callback.message.answer(f"Не могу зафиксировать: {exc}")
         await callback.answer()

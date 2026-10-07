@@ -215,6 +215,24 @@ class SqliteRepository:
         row = await cur.fetchone()
         return self._from_row(row) if row else None
 
+    async def list_by_telegram(
+        self, telegram_user_id: int, *, statuses: list[BookingStatus]
+    ) -> list[BookingRecord]:
+        if not statuses:
+            return []
+        placeholders = ",".join("?" for _ in statuses)
+        cur = await self.db.execute(
+            f"""
+            SELECT b.*, c.telegram_user_id AS customer_telegram_id, c.name AS customer_name
+            FROM bookings b
+            JOIN customers c ON c.id = b.customer_id
+            WHERE c.telegram_user_id = ? AND b.status IN ({placeholders})
+            ORDER BY b.updated_at DESC
+            """,
+            [telegram_user_id, *(status.value for status in statuses)],
+        )
+        return [self._from_row(row) for row in await cur.fetchall()]
+
     def _from_row(self, row: aiosqlite.Row) -> BookingRecord:
         keys = row.keys()
         return BookingRecord(

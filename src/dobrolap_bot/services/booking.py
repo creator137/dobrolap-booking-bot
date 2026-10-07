@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any
@@ -80,6 +81,7 @@ class BookingService:
         self.sheets = sheets
         self.placement = PlacementService(catalog)
         self.pricing = PricingService(catalog)
+        self._lifecycle_lock = asyncio.Lock()
 
     def sheet_labels(self, unit_id: str) -> list[str]:
         """Calendar row label(s) for a catalog unit (pool-aware)."""
@@ -247,33 +249,42 @@ class BookingService:
         return booking
 
     async def approve(self, booking_id: str) -> BookingRecord:
-        booking = await self._require(booking_id)
-        sheet_label: str | None = None
-        if booking.unit_id:
-            try:
-                sheet_label = self.resolve_free_sheet_label(
-                    booking.unit_id,
-                    booking.date_from,
-                    booking.date_to,
-                    exclude_booking_id=booking.id,
-                )
-                self.sheets.reserve_booking(
-                    booking_id=booking.id,
-                    unit_id=sheet_label,
-                    date_from=booking.date_from,
-                    date_to=booking.date_to,
-                    status=BookingStatus.WAITING_PAYMENT.value,
-                )
-            except ValueError as exc:
-                if "unit_occupied" in str(exc):
-                    raise ValueError("unit_occupied_on_approve") from exc
-                raise
+        async with self._lifecycle_lock:
+            return await self._approve(booking_id)
 
-        extra = {"sheet_label": sheet_label} if sheet_label else None
-        booking = await self._set_status(
-            booking, BookingStatus.OWNER_APPROVED, extra_payload=extra
-        )
-        booking = await self._set_status(booking, BookingStatus.WAITING_PAYMENT)
+    async def _approve(self, booking_id: str) -> BookingRecord:
+        booking = await self._require(booking_id)
+        if booking.status != BookingStatus.WAITING_OWNER:
+            raise InvalidTransitionError(f"{booking.status} → OWNER_APPROVED is not allowed")
+        if not booking.unit_id:
+            raise ValueError("unit_required")
+        try:
+            sheet_label = self.resolve_free_sheet_label(
+                booking.unit_id,
+                booking.date_from,
+                booking.date_to,
+                exclude_booking_id=booking.id,
+            )
+            self.sheets.reserve_booking(
+                booking_id=booking.id,
+                unit_id=sheet_label,
+                date_from=booking.date_from,
+                date_to=booking.date_to,
+                status=BookingStatus.WAITING_PAYMENT.value,
+            )
+        except ValueError as exc:
+            if "unit_occupied" in str(exc):
+                raise ValueError("unit_occupied_on_approve") from exc
+            raise
+
+        booking.status = BookingStatus.WAITING_PAYMENT
+        booking.payload = {**booking.payload, "sheet_label": sheet_label}
+        booking.updated_at = _utcnow()
+        try:
+            await self.repo.save_booking(booking)
+        except Exception:
+            self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
+            raise
         return booking
 
     async def reject(self, booking_id: str, reason: str | None = None) -> BookingRecord:
@@ -292,18 +303,33 @@ class BookingService:
         return booking
 
     async def cancel(self, booking_id: str, reason: str | None = None) -> BookingRecord:
+        async with self._lifecycle_lock:
+            return await self._cancel(booking_id, reason)
+
+    async def _cancel(self, booking_id: str, reason: str | None = None) -> BookingRecord:
         booking = await self._require(booking_id)
-        booking = await self._set_status(
-            booking,
-            BookingStatus.CANCELLED,
-            owner_note=reason,
-            extra_payload={"cancel_reason": reason},
-        )
+        original_status = booking.status
+        transition(booking.status, BookingStatus.CANCELLED)
         held = booking.payload.get("sheet_label")
-        self.sheets.release_booking(
-            booking_id=booking.id,
-            unit_id=held or (self.sheet_label(booking.unit_id) if booking.unit_id else None),
-        )
+        if held:
+            self.sheets.release_booking(booking_id=booking.id, unit_id=held)
+        try:
+            booking = await self._set_status(
+                booking,
+                BookingStatus.CANCELLED,
+                owner_note=reason,
+                extra_payload={"cancel_reason": reason},
+            )
+        except Exception:
+            if held:
+                self.sheets.reserve_booking(
+                    booking_id=booking.id,
+                    unit_id=held,
+                    date_from=booking.date_from,
+                    date_to=booking.date_to,
+                    status=original_status.value,
+                )
+            raise
         return booking
 
     async def add_owner_question(self, booking_id: str, text: str) -> BookingRecord:
@@ -325,7 +351,14 @@ class BookingService:
         return booking
 
     async def suggest_unit(self, booking_id: str, unit_id: str) -> tuple[BookingRecord, PriceQuote]:
+        async with self._lifecycle_lock:
+            return await self._suggest_unit(booking_id, unit_id)
+
+    async def _suggest_unit(self, booking_id: str, unit_id: str) -> tuple[BookingRecord, PriceQuote]:
         booking = await self._require(booking_id)
+        target = BookingStatus.WAITING_OWNER
+        if booking.status != target and not can_transition(booking.status, target):
+            raise InvalidTransitionError(f"{booking.status} → {target} is not allowed")
         unit = self.catalog.get_accommodation(unit_id)
         if unit is None:
             raise ValueError("unknown_unit")
@@ -350,9 +383,9 @@ class BookingService:
             service_ids=service_ids,
             promo_code=booking.payload.get("promo_code"),
         )
-        target = BookingStatus.WAITING_OWNER
-        if booking.status != target and not can_transition(booking.status, target):
-            raise InvalidTransitionError(f"{booking.status} → {target} is not allowed")
+        held = booking.payload.get("sheet_label")
+        if held:
+            self.sheets.release_booking(booking_id=booking.id, unit_id=held)
         booking.status = target
         booking.unit_id = unit_id
         booking.price_total = quote.total_rub
@@ -364,12 +397,29 @@ class BookingService:
             "quote_provisional": quote.provisional,
             "suggested_by_owner": True,
             "manual_matching": False,
+            "sheet_label": None,
+            "receipt_file_ids": [],
         }
         booking.updated_at = _utcnow()
-        await self.repo.save_booking(booking)
+        try:
+            await self.repo.save_booking(booking)
+        except Exception:
+            if held:
+                self.sheets.reserve_booking(
+                    booking_id=booking.id,
+                    unit_id=held,
+                    date_from=booking.date_from,
+                    date_to=booking.date_to,
+                    status=BookingStatus.WAITING_PAYMENT.value,
+                )
+            raise
         return booking, quote
 
     async def attach_receipt(self, booking_id: str, file_id: str) -> BookingRecord:
+        async with self._lifecycle_lock:
+            return await self._attach_receipt(booking_id, file_id)
+
+    async def _attach_receipt(self, booking_id: str, file_id: str) -> BookingRecord:
         booking = await self._require(booking_id)
         if booking.status != BookingStatus.WAITING_PAYMENT:
             raise InvalidTransitionError("receipt only accepted in WAITING_PAYMENT")
@@ -381,24 +431,26 @@ class BookingService:
         return booking
 
     async def confirm_payment(self, booking_id: str) -> BookingRecord:
+        async with self._lifecycle_lock:
+            return await self._confirm_payment(booking_id)
+
+    async def _confirm_payment(self, booking_id: str) -> BookingRecord:
         booking = await self._require(booking_id)
+        if booking.status != BookingStatus.WAITING_PAYMENT:
+            raise InvalidTransitionError(f"{booking.status} → CONFIRMED is not allowed")
+        if not booking.unit_id or not booking.payload.get("sheet_label"):
+            raise ValueError("unit_required")
         receipts = list(booking.payload.get("receipt_file_ids") or [])
         if not receipts:
             raise ValueError("receipt_required")
-        if booking.unit_id:
-            label = booking.payload.get("sheet_label") or self.resolve_free_sheet_label(
-                booking.unit_id,
-                booking.date_from,
-                booking.date_to,
-                exclude_booking_id=booking.id,
-            )
-            self.sheets.reserve_booking(
-                booking_id=booking.id,
-                unit_id=label,
-                date_from=booking.date_from,
-                date_to=booking.date_to,
-                status=BookingStatus.CONFIRMED.value,
-            )
+        label = booking.payload["sheet_label"]
+        self.sheets.reserve_booking(
+            booking_id=booking.id,
+            unit_id=label,
+            date_from=booking.date_from,
+            date_to=booking.date_to,
+            status=BookingStatus.CONFIRMED.value,
+        )
         return await self._set_status(booking, BookingStatus.CONFIRMED)
 
     async def _require(self, booking_id: str) -> BookingRecord:

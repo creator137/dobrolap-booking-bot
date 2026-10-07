@@ -87,8 +87,8 @@ function occupiedUnits_(dateFromStr, dateToStr, excludeBookingId) {
   try {
     var sh = calendarSheet_();
     var values = sh.getDataRange().getValues();
+    var dateCols = dateColumns_(values[HEADER_ROW - 1] || [], dateFromStr, dateToStr);
     if (values.length < FIRST_DATA_ROW) return [];
-    var dateCols = dateColumns_(values[HEADER_ROW - 1], dateFromStr, dateToStr);
     var rooms = roomRows_(values);
     var occupied = {};
     for (var i = 0; i < rooms.length; i++) {
@@ -243,12 +243,24 @@ function dateColumns_(headerRow, dateFromStr, dateToStr) {
   var from = parseYmd_(dateFromStr);
   var to = parseYmd_(dateToStr);
   var cols = [];
+  var days = {};
   for (var c = FIRST_DATE_COL - 1; c < headerRow.length; c++) {
     var d = parseHeaderDate_(headerRow[c]);
     if (!d) continue;
     if (d.getTime() >= from.getTime() && d.getTime() < to.getTime()) {
       cols.push(c);
+      days[d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate()] = true;
     }
+  }
+  var expected = 0;
+  for (var day = new Date(from.getTime()); day.getTime() < to.getTime(); day.setDate(day.getDate() + 1)) {
+    expected++;
+    if (!days[day.getFullYear() + "-" + day.getMonth() + "-" + day.getDate()]) {
+      throw new Error("calendar_date_range_incomplete");
+    }
+  }
+  if (!expected || cols.length !== expected) {
+    throw new Error("calendar_date_range_incomplete");
   }
   return cols;
 }

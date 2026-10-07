@@ -728,14 +728,29 @@ async def _accept_receipt(
     file_id: str,
     *,
     as_document: bool = False,
+    booking_id: str | None = None,
 ) -> bool:
     """Attach receipt for WAITING_PAYMENT booking (FSM or SQLite recovery)."""
-    booking = await booking_service.repo.find_latest_by_telegram(
+    bookings = await booking_service.repo.list_by_telegram(
         message.from_user.id,
         statuses=[BookingStatus.WAITING_PAYMENT],
     )
-    if not booking:
+    if not bookings:
         return False
+    if booking_id:
+        booking = next((item for item in bookings if item.id == booking_id), None)
+        if booking is None:
+            await message.answer("Эта заявка уже не ожидает оплату. Проверьте /status.")
+            return True
+    elif len(bookings) == 1:
+        booking = bookings[0]
+    else:
+        ids = ", ".join(item.id for item in bookings)
+        await message.answer(
+            f"У вас несколько заявок на оплату: {ids}. "
+            "Выберите нужную командой /receipt НОМЕР_ЗАЯВКИ и пришлите чек ещё раз."
+        )
+        return True
     try:
         booking = await booking_service.attach_receipt(booking.id, file_id)
     except Exception as exc:
@@ -764,31 +779,58 @@ async def _accept_receipt(
     return True
 
 
+@router.message(Command("receipt"))
+async def cmd_receipt(message: Message, state: FSMContext, booking_service: BookingService) -> None:
+    parts = (message.text or "").split(maxsplit=1)
+    booking_id = parts[1].strip() if len(parts) == 2 else ""
+    bookings = await booking_service.repo.list_by_telegram(
+        message.from_user.id, statuses=[BookingStatus.WAITING_PAYMENT]
+    )
+    if not bookings:
+        await message.answer("Заявок, ожидающих оплату, нет.")
+        return
+    if not booking_id and len(bookings) == 1:
+        booking_id = bookings[0].id
+    if booking_id not in {item.id for item in bookings}:
+        ids = ", ".join(item.id for item in bookings)
+        await message.answer(f"Укажите номер своей заявки: /receipt НОМЕР_ЗАЯВКИ. Доступные: {ids}")
+        return
+    await state.set_state(BookingForm.waiting_receipt)
+    await state.update_data(booking_id=booking_id)
+    await message.answer(f"Пришлите чек по заявке {booking_id} фото или документом.")
+
+
 @router.message(BookingForm.waiting_receipt, F.photo)
 async def receipt_photo_fsm(
     message: Message,
+    state: FSMContext,
     booking_service: BookingService,
     owner_chat_id: int | None,
 ) -> None:
+    data = await state.get_data()
     await _accept_receipt(
-        message, booking_service, owner_chat_id, message.photo[-1].file_id
+        message, booking_service, owner_chat_id, message.photo[-1].file_id,
+        booking_id=data.get("booking_id"),
     )
 
 
 @router.message(BookingForm.waiting_receipt, F.document)
 async def receipt_document_fsm(
     message: Message,
+    state: FSMContext,
     booking_service: BookingService,
     owner_chat_id: int | None,
 ) -> None:
     if not message.document:
         return
+    data = await state.get_data()
     await _accept_receipt(
         message,
         booking_service,
         owner_chat_id,
         message.document.file_id,
         as_document=True,
+        booking_id=data.get("booking_id"),
     )
 
 

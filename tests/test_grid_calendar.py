@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from dobrolap_bot.integrations.grid_calendar import (
     build_room_label,
     date_columns,
     iter_room_rows,
     parse_header_date,
+    require_complete_date_range,
 )
 
 
@@ -68,3 +71,15 @@ def test_iter_room_rows_matches_prod_shape():
         date_to=date(2026, 8, 22),
     )
     assert cols == [(2, date(2026, 8, 21))]
+
+
+def test_calendar_range_requires_every_night_once():
+    start, end = date(2026, 8, 21), date(2026, 8, 24)
+    require_complete_date_range(
+        [(2, date(2026, 8, 21)), (3, date(2026, 8, 22)), (4, date(2026, 8, 23))],
+        start, end,
+    )
+    with pytest.raises(ValueError, match="calendar_date_range_incomplete"):
+        require_complete_date_range([(2, start), (3, date(2026, 8, 23))], start, end)
+    with pytest.raises(ValueError, match="calendar_date_range_incomplete"):
+        require_complete_date_range([(2, start), (3, start), (4, date(2026, 8, 23))], start, end)

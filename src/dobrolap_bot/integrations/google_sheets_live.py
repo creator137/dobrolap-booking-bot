@@ -20,6 +20,7 @@ from dobrolap_bot.integrations.grid_calendar import (
     date_columns,
     is_occupied_cell,
     iter_room_rows,
+    require_complete_date_range,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,15 +126,17 @@ class GoogleSheetsGateway:
         exclude_booking_id: str | None = None,
     ) -> set[str]:
         values = self._values()
-        if len(values) < self.first_data_row:
-            return set()
-        header = values[self.header_row - 1]
+        header = values[self.header_row - 1] if len(values) >= self.header_row else []
         cols = date_columns(
             header,
             first_date_col=self.first_date_col,
             date_from=date_from,
             date_to=date_to,
         )
+        try:
+            require_complete_date_range(cols, date_from, date_to)
+        except ValueError as exc:
+            raise SheetsUnavailableError(str(exc)) from exc
         occupied: set[str] = set()
         for row_idx, room in self._rooms(values):
             row = values[row_idx]
@@ -176,8 +179,10 @@ class GoogleSheetsGateway:
             date_from=date_from,
             date_to=date_to,
         )
-        if not cols:
-            raise SheetsUnavailableError("no_date_columns_for_range")
+        try:
+            require_complete_date_range(cols, date_from, date_to)
+        except ValueError as exc:
+            raise SheetsUnavailableError(str(exc)) from exc
 
         for col_idx, _d in cols:
             if is_occupied_cell(cell_text(values[row_idx], col_idx), booking_id):

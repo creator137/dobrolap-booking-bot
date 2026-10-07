@@ -143,6 +143,18 @@ def date_columns(
     return cols
 
 
+def require_complete_date_range(
+    columns: list[tuple[int, date]], date_from: date, date_to: date
+) -> None:
+    """Reject calendars without exactly one column for every booked night."""
+    expected_days = (date_to - date_from).days
+    actual = {day for _, day in columns}
+    if expected_days < 1 or len(columns) != expected_days or len(actual) != expected_days:
+        raise ValueError("calendar_date_range_incomplete")
+    if any(date_from + timedelta(days=offset) not in actual for offset in range(expected_days)):
+        raise ValueError("calendar_date_range_incomplete")
+
+
 def is_occupied_cell(cell: str, exclude_booking_id: str | None = None) -> bool:
     text = (cell or "").strip()
     if not text:
