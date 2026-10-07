@@ -8,6 +8,7 @@ MVP-поток реализован: анкета → подбор → услу�
 
 - [Архитектура](docs/ARCHITECTURE.md)
 - [План реализации](docs/IMPLEMENTATION.md)
+- [План завершения и запуска](docs/RELEASE_PLAN.md)
 - [Доступ к таблице (Apps Script)](docs/OWNER_SETUP.md)
 - [Реестр материалов](docs/source/materials-inventory.md)
 
