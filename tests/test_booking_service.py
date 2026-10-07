@@ -256,10 +256,10 @@ async def test_failed_cancel_save_restores_calendar_hold(booking_service, monkey
     booking = await booking_service.approve(booking.id)
     label = booking.payload["sheet_label"]
 
-    async def fail_save(record):
+    async def fail_save(record, *, expected_status=None):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(booking_service.repo, "save_booking", fail_save)
+    monkeypatch.setattr(booking_service.repo, "save_booking_if_status", fail_save)
     with pytest.raises(RuntimeError, match="database unavailable"):
         await booking_service.cancel(booking.id)
     assert (await booking_service.get(booking.id)).status == BookingStatus.WAITING_PAYMENT
@@ -294,3 +294,92 @@ async def test_receipt_requires_selection_when_multiple_bookings_wait(booking_se
     )
     assert (await booking_service.get(bookings[0].id)).payload["receipt_file_ids"] == ["receipt"]
     assert not (await booking_service.get(bookings[1].id)).payload["receipt_file_ids"]
+
+
+@pytest.mark.asyncio
+async def test_approve_sets_hold_expiry(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=800, customer_name="H", username=None, consent_at=None,
+        date_from=date(2027, 7, 1), date_to=date(2027, 7, 3), pets=[_pet()],
+        unit_id="comfort", feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+    assert booking.hold_expires_at is not None
+    assert booking.hold_expires_at > datetime.now(timezone.utc)
+    assert any(e.get("action") == "approve_hold" for e in booking.payload.get("audit") or [])
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_confirm_sets_refund_pending(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=801, customer_name="H", username=None, consent_at=None,
+        date_from=date(2027, 8, 1), date_to=date(2027, 8, 3), pets=[_pet()],
+        unit_id="comfort", feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+    label = booking.payload["sheet_label"]
+    await booking_service.attach_receipt(booking.id, "r1")
+    booking = await booking_service.confirm_payment(booking.id)
+    booking = await booking_service.cancel(booking.id, "client", actor="owner", refund_pending=True)
+    assert booking.status == BookingStatus.CANCELLED
+    assert booking.payload["refund"]["status"] == "pending"
+    assert label not in booking_service.sheets.occupied_unit_ids(booking.date_from, booking.date_to)
+    booking = await booking_service.mark_refund(booking.id, "2000 returned")
+    assert booking.payload["refund"]["status"] == "done"
+    # idempotent cancel
+    again = await booking_service.cancel(booking.id, "again")
+    assert again.status == BookingStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_expire_hold(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=802, customer_name="H", username=None, consent_at=None,
+        date_from=date(2027, 9, 1), date_to=date(2027, 9, 3), pets=[_pet()],
+        unit_id="comfort", feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+    booking.hold_expires_at = datetime.now(timezone.utc).replace(year=2020)
+    await booking_service.repo.save_booking(booking)
+    expired = await booking_service.expire_hold(booking.id)
+    assert expired is not None
+    assert expired.status == BookingStatus.EXPIRED
+    assert booking_service.sheets.list_bookings() == []
+    # second expire is no-op
+    assert await booking_service.expire_hold(booking.id) is None
+
+
+@pytest.mark.asyncio
+async def test_reject_only_waiting_owner(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=803, customer_name="H", username=None, consent_at=None,
+        date_from=date(2027, 10, 1), date_to=date(2027, 10, 3), pets=[_pet()],
+        unit_id="comfort", feeding=None, service_ids=[], placement_flags=[],
+        manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+    with pytest.raises(InvalidTransitionError):
+        await booking_service.reject(booking.id, "too late")
+
+
+@pytest.mark.asyncio
+async def test_fsm_sqlite_roundtrip(tmp_path):
+    from aiogram.fsm.storage.base import StorageKey
+    from dobrolap_bot.repositories.fsm_sqlite import SqliteFsmStorage
+
+    storage = SqliteFsmStorage(tmp_path / "fsm.db")
+    await storage.open()
+    key = StorageKey(bot_id=1, chat_id=2, user_id=2)
+    await storage.set_state(key, "BookingForm:waiting_receipt")
+    await storage.set_data(key, {"booking_id": "abc"})
+    assert await storage.get_state(key) == "BookingForm:waiting_receipt"
+    assert (await storage.get_data(key))["booking_id"] == "abc"
+    await storage.close()
+    # reopen
+    storage2 = SqliteFsmStorage(tmp_path / "fsm.db")
+    await storage2.open()
+    assert await storage2.get_state(key) == "BookingForm:waiting_receipt"
+    await storage2.close()

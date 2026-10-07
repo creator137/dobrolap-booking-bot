@@ -28,3 +28,5 @@ class OwnerForm(StatesGroup):
     ask_question = State()
     suggest_unit = State()
     reject_reason = State()
+    cancel_reason = State()
+    refund_note = State()

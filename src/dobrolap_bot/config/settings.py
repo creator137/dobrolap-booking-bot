@@ -39,6 +39,15 @@ class Settings(BaseSettings):
 
     payment_instructions: str = ""
 
+    # Hold after owner approve (WAITING_PAYMENT). Owner can override later.
+    hold_hours: float = 24.0
+    # Single reminder this many hours before hold expiry (0 = disabled).
+    hold_reminder_hours_before: float = 4.0
+    # Background poll interval for expiry / reminders (seconds).
+    hold_watch_interval_sec: float = 60.0
+    # Without passport photos, mark booking incomplete for owner (still allow flow).
+    require_passport_photos: bool = True
+
     llm_enabled: bool = False
     llm_api_key: str = ""
     llm_model: str = ""

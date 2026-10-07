@@ -9,6 +9,26 @@ def yes_no_kb() -> ReplyKeyboardMarkup:
     )
 
 
+def no_kb() -> ReplyKeyboardMarkup:
+    """Optional free-text step: skip with «Нет» or type an answer."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Нет")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def passport_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Готово")],
+            [KeyboardButton(text="Без фото")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
 def consent_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -112,7 +132,45 @@ def owner_paid_kb(booking_id: str) -> InlineKeyboardMarkup:
                     callback_data=f"own:paid:{booking_id}",
                 )
             ],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data=f"own:reject:{booking_id}")],
+            [
+                InlineKeyboardButton(
+                    text="🚫 Отменить бронь",
+                    callback_data=f"own:cancel:{booking_id}",
+                )
+            ],
+        ]
+    )
+
+
+def owner_cancel_kb(booking_id: str) -> InlineKeyboardMarkup:
+    """For cancel requests after approve / confirmed — not «Отклонить»."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🚫 Отменить бронь",
+                    callback_data=f"own:cancel:{booking_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💰 Оплата получена",
+                    callback_data=f"own:paid:{booking_id}",
+                )
+            ],
+        ]
+    )
+
+
+def owner_refund_kb(booking_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💸 Отметить возврат залога",
+                    callback_data=f"own:refund:{booking_id}",
+                )
+            ]
         ]
     )
 

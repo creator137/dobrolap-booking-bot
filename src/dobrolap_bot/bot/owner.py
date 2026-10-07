@@ -6,9 +6,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from dobrolap_bot.bot.keyboards import client_reply_kb, owner_actions_kb
+from dobrolap_bot.bot.keyboards import (
+    client_reply_kb,
+    owner_actions_kb,
+    owner_refund_kb,
+)
 from dobrolap_bot.bot.states import BookingForm, OwnerForm
 from dobrolap_bot.config.loader import Catalog
+from dobrolap_bot.domain.enums import BookingStatus
 from dobrolap_bot.services.booking import BookingService, InvalidTransitionError
 from dobrolap_bot.services.summary import format_client_status, format_owner_summary
 
@@ -115,12 +120,24 @@ async def owner_approve(
 
 
 @router.callback_query(F.data.startswith("own:reject:"))
-async def owner_reject_start(callback: CallbackQuery, state: FSMContext) -> None:
+async def owner_reject_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
     parsed = _parse_owner_cb(callback.data or "")
     if not parsed:
         await callback.answer()
         return
     _, booking_id = parsed
+    booking = await booking_service.get(booking_id)
+    if booking and booking.status != BookingStatus.WAITING_OWNER:
+        await callback.message.answer(
+            "«Отклонить» только для новых заявок. "
+            "После одобрения используйте «Отменить бронь»."
+        )
+        await callback.answer()
+        return
     await state.set_state(OwnerForm.reject_reason)
     await state.update_data(owner_booking_id=booking_id)
     await callback.message.answer(
@@ -144,7 +161,12 @@ async def owner_reject_finish(
     reason = (message.text or "").strip()
     if reason == "-":
         reason = None
-    booking = await booking_service.reject(booking_id, reason)
+    try:
+        booking = await booking_service.reject(booking_id, reason)
+    except InvalidTransitionError as exc:
+        await state.clear()
+        await message.answer(f"Нельзя отклонить: {exc}")
+        return
     await state.clear()
     await message.answer(f"Заявка {booking_id} отклонена.")
     client_id = booking.customer_telegram_id
@@ -153,6 +175,125 @@ async def owner_reject_finish(
         if reason:
             text += f"\nПричина: {reason}"
         text += "\nМожно создать новую: /start"
+        await message.bot.send_message(client_id, text)
+
+
+@router.callback_query(F.data.startswith("own:cancel:"))
+async def owner_cancel_start(callback: CallbackQuery, state: FSMContext) -> None:
+    parsed = _parse_owner_cb(callback.data or "")
+    if not parsed:
+        await callback.answer()
+        return
+    _, booking_id = parsed
+    await state.set_state(OwnerForm.cancel_reason)
+    await state.update_data(owner_booking_id=booking_id)
+    await callback.message.answer(
+        f"Причина отмены брони {booking_id}? (или «-» без причины).\n"
+        "Место в календаре будет освобождено. Возврат залога — отдельной кнопкой после отмены."
+    )
+    await callback.answer()
+
+
+@router.message(OwnerForm.cancel_reason)
+async def owner_cancel_finish(
+    message: Message,
+    state: FSMContext,
+    booking_service: BookingService,
+    catalog: Catalog,
+) -> None:
+    data = await state.get_data()
+    booking_id = data.get("owner_booking_id")
+    if not booking_id:
+        await state.clear()
+        return
+    reason = (message.text or "").strip()
+    if reason == "-":
+        reason = None
+    try:
+        before = await booking_service.get(booking_id)
+        was_confirmed = bool(before and before.status == BookingStatus.CONFIRMED)
+        booking = await booking_service.cancel(
+            booking_id,
+            reason,
+            actor="owner",
+            refund_pending=was_confirmed,
+        )
+    except InvalidTransitionError as exc:
+        await state.clear()
+        await message.answer(f"Нельзя отменить: {exc}")
+        return
+    except Exception as exc:
+        await message.answer(f"Календарь/отмена не удались: {exc}")
+        return
+
+    await state.clear()
+    try:
+        await message.answer(
+            f"Бронь {booking_id} отменена (CANCELLED).\n" + format_owner_summary(booking, catalog),
+            reply_markup=owner_refund_kb(booking_id)
+            if (booking.payload.get("refund") or {}).get("status") == "pending"
+            else None,
+        )
+    except Exception:
+        await message.answer(f"Бронь {booking_id} отменена.")
+
+    client_id = booking.customer_telegram_id
+    if client_id and message.bot:
+        text = f"Бронь {booking_id} отменена владельцем."
+        if reason:
+            text += f"\nПричина: {reason}"
+        refund = booking.payload.get("refund") or {}
+        if refund.get("status") == "pending":
+            text += (
+                "\nВозврат залога выполняется вручную — статус возврата придёт отдельно, "
+                "когда владелец его отметит."
+            )
+        text += "\nНовая заявка: /start"
+        await message.bot.send_message(client_id, text)
+
+
+@router.callback_query(F.data.startswith("own:refund:"))
+async def owner_refund_start(callback: CallbackQuery, state: FSMContext) -> None:
+    parsed = _parse_owner_cb(callback.data or "")
+    if not parsed:
+        await callback.answer()
+        return
+    _, booking_id = parsed
+    await state.set_state(OwnerForm.refund_note)
+    await state.update_data(owner_booking_id=booking_id)
+    await callback.message.answer(
+        f"Отметьте возврат по заявке {booking_id}: сумма/комментарий (или «-»)."
+    )
+    await callback.answer()
+
+
+@router.message(OwnerForm.refund_note)
+async def owner_refund_finish(
+    message: Message,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
+    data = await state.get_data()
+    booking_id = data.get("owner_booking_id")
+    if not booking_id:
+        await state.clear()
+        return
+    note = (message.text or "").strip()
+    if note == "-":
+        note = None
+    try:
+        booking = await booking_service.mark_refund(booking_id, note)
+    except InvalidTransitionError as exc:
+        await state.clear()
+        await message.answer(f"Нельзя отметить возврат: {exc}")
+        return
+    await state.clear()
+    await message.answer(f"Возврат по {booking_id} отмечен.")
+    client_id = booking.customer_telegram_id
+    if client_id and message.bot:
+        text = f"Владелец отметил возврат залога по заявке {booking_id}."
+        if note:
+            text += f"\nКомментарий: {note}"
         await message.bot.send_message(client_id, text)
 
 

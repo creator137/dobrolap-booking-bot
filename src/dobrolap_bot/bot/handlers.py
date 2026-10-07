@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from aiogram import F, Router
@@ -13,13 +13,22 @@ from aiogram.types import (
     Message,
 )
 
+from dobrolap_bot.bot.calendar_kb import (
+    build_calendar,
+    dates_prompt,
+    parse_day,
+    parse_nav,
+)
 from dobrolap_bot.bot.helpers import FEED_MAP, KIND_MAP, is_young, parse_dates, parse_yes
 from dobrolap_bot.bot.keyboards import (
     add_pet_kb,
     consent_kb,
     feeding_kb,
+    no_kb,
     owner_actions_kb,
+    owner_cancel_kb,
     owner_paid_kb,
+    passport_kb,
     pet_kind_kb,
     services_kb,
     submit_kb,
@@ -152,22 +161,48 @@ async def cmd_cancel_booking(
         await message.bot.send_message(
             owner_chat_id,
             f"⚠️ Клиент просит отменить заявку {booking.id} (статус {booking.status.value}).",
-            reply_markup=owner_actions_kb(booking.id),
+            reply_markup=owner_cancel_kb(booking.id),
         )
+
+
+def _calendar_kb(*, pick_from: date | None = None, year: int | None = None, month: int | None = None):
+    today = date.today()
+    anchor = pick_from or today
+    y = year or anchor.year
+    m = month or anchor.month
+    min_date = (pick_from + timedelta(days=1)) if pick_from else today
+    return build_calendar(year=y, month=m, today=today, pick_from=pick_from, min_date=min_date)
+
+
+async def _finish_dates(message: Message, state: FSMContext, date_from: date, date_to: date) -> None:
+    await state.update_data(
+        date_from=date_from.isoformat(),
+        date_to=date_to.isoformat(),
+        cal_pick_from=None,
+    )
+    await state.set_state(BookingForm.pet_kind)
+    await message.answer(
+        f"Даты: {date_from.strftime('%d.%m.%Y')} → {date_to.strftime('%d.%m.%Y')}\n"
+        "Кто ваш питомец?",
+        reply_markup=pet_kind_kb(),
+    )
 
 
 @router.callback_query(BookingForm.consent, F.data == "consent:yes")
 async def consent_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    today = date.today()
     await state.update_data(
         consent_at=datetime.now(timezone.utc).isoformat(),
         pets=[],
         service_ids=[],
+        cal_pick_from=None,
     )
     await state.set_state(BookingForm.dates)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        "Укажите даты заезда и выезда в формате ДД.ММ.ГГГГ - ДД.ММ.ГГГГ\n"
-        "Пример: 10.10.2026 - 15.10.2026"
+        dates_prompt(),
+        reply_markup=_calendar_kb(year=today.year, month=today.month),
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -180,16 +215,111 @@ async def consent_no(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.callback_query(BookingForm.dates, F.data == "cal:noop")
+async def cal_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.callback_query(BookingForm.dates, F.data == "cal:text")
+async def cal_text_hint(callback: CallbackQuery) -> None:
+    await callback.message.answer(
+        "Напишите даты одним сообщением:\n<code>10.10.2026 - 15.10.2026</code>",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(BookingForm.dates, F.data == "cal:reset")
+async def cal_reset(callback: CallbackQuery, state: FSMContext) -> None:
+    today = date.today()
+    await state.update_data(cal_pick_from=None)
+    await callback.message.edit_text(
+        dates_prompt(),
+        reply_markup=_calendar_kb(year=today.year, month=today.month),
+        parse_mode="HTML",
+    )
+    await callback.answer("Сброшено")
+
+
+@router.callback_query(BookingForm.dates, F.data.startswith("cal:nav:"))
+async def cal_nav(callback: CallbackQuery, state: FSMContext) -> None:
+    parsed = parse_nav(callback.data or "")
+    if not parsed:
+        await callback.answer()
+        return
+    year, month = parsed
+    data = await state.get_data()
+    pick_raw = data.get("cal_pick_from")
+    pick_from = date.fromisoformat(pick_raw) if pick_raw else None
+    await callback.message.edit_reply_markup(
+        reply_markup=_calendar_kb(pick_from=pick_from, year=year, month=month)
+    )
+    await callback.answer()
+
+
+@router.callback_query(BookingForm.dates, F.data.startswith("cal:day:"))
+async def cal_day(callback: CallbackQuery, state: FSMContext) -> None:
+    chosen = parse_day(callback.data or "")
+    if not chosen:
+        await callback.answer("Некорректная дата", show_alert=True)
+        return
+    today = date.today()
+    data = await state.get_data()
+    pick_raw = data.get("cal_pick_from")
+
+    if not pick_raw:
+        if chosen < today:
+            await callback.answer("Дата в прошлом", show_alert=True)
+            return
+        await state.update_data(cal_pick_from=chosen.isoformat())
+        await callback.message.edit_text(
+            dates_prompt(pick_from=chosen),
+            reply_markup=_calendar_kb(
+                pick_from=chosen, year=chosen.year, month=chosen.month
+            ),
+            parse_mode="HTML",
+        )
+        await callback.answer(f"Заезд {chosen.strftime('%d.%m.%Y')}")
+        return
+
+    date_from = date.fromisoformat(pick_raw)
+    if chosen <= date_from:
+        await callback.answer("Выезд должен быть позже заезда", show_alert=True)
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.answer()
+    await _finish_dates(callback.message, state, date_from, chosen)
+
+
 @router.message(BookingForm.dates)
 async def set_dates(message: Message, state: FSMContext) -> None:
     parsed = parse_dates(message.text or "")
     if not parsed:
-        await message.answer("Не разобрал даты. Формат: 10.10.2026 - 15.10.2026")
+        today = date.today()
+        data = await state.get_data()
+        pick_raw = data.get("cal_pick_from")
+        pick_from = date.fromisoformat(pick_raw) if pick_raw else None
+        await message.answer(
+            "Не разобрал даты. Выберите в календаре или формат: 10.10.2026 - 15.10.2026",
+            reply_markup=_calendar_kb(
+                pick_from=pick_from,
+                year=(pick_from or today).year,
+                month=(pick_from or today).month,
+            ),
+            parse_mode="HTML",
+        )
         return
     date_from, date_to = parsed
-    await state.update_data(date_from=date_from.isoformat(), date_to=date_to.isoformat())
-    await state.set_state(BookingForm.pet_kind)
-    await message.answer("Кто ваш питомец?", reply_markup=pet_kind_kb())
+    today = date.today()
+    if date_from < today:
+        await message.answer(
+            f"Дата заезда не может быть в прошлом (сегодня {today.strftime('%d.%m.%Y')})."
+        )
+        return
+    await _finish_dates(message, state, date_from, date_to)
 
 
 @router.message(BookingForm.pet_kind)
@@ -211,7 +341,10 @@ async def set_pet_name(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(draft_name=name)
     await state.set_state(BookingForm.pet_breed)
-    await message.answer("Порода? Если неизвестна — напишите «нет» или «метьс».")
+    await message.answer(
+        "Порода? Если неизвестна — «Нет» или «метьс».",
+        reply_markup=no_kb(),
+    )
 
 
 @router.message(BookingForm.pet_breed)
@@ -277,7 +410,8 @@ async def set_parasite(message: Message, state: FSMContext) -> None:
     await state.update_data(draft_parasite=val)
     await state.set_state(BookingForm.pet_behavior)
     await message.answer(
-        "Кратко опишите поведение (агрессия, стресс, лай, метки) или напишите «нет»."
+        "Кратко опишите поведение (агрессия, стресс, лай, метки) или нажмите «Нет».",
+        reply_markup=no_kb(),
     )
 
 
@@ -305,7 +439,10 @@ async def set_behavior(message: Message, state: FSMContext) -> None:
             flags.mobility_limited = True
     await state.update_data(draft_behavior=flags.model_dump(), draft_behavior_raw=raw)
     await state.set_state(BookingForm.pet_health)
-    await message.answer("Особенности здоровья / лечение / инвалидность? Или «нет».")
+    await message.answer(
+        "Особенности здоровья / лечение / инвалидность? Или «Нет».",
+        reply_markup=no_kb(),
+    )
 
 
 @router.message(BookingForm.pet_health)
@@ -328,7 +465,9 @@ async def set_health(message: Message, state: FSMContext) -> None:
     await state.set_state(BookingForm.pet_passport)
     await message.answer(
         "Пришлите фото страниц ветпаспорта (данные, прививки, обработки).\n"
-        "Можно несколько фото. Когда закончите — напишите «готово»."
+        "Можно несколько фото. Когда закончите — «Готово».\n"
+        "Если фото нет — «Без фото» (заявка уйдёт владельцу как неполная).",
+        reply_markup=passport_kb(),
     )
 
 
@@ -338,17 +477,32 @@ async def passport_photo(message: Message, state: FSMContext) -> None:
     files = list(data.get("draft_passport_ids") or [])
     files.append(message.photo[-1].file_id)
     await state.update_data(draft_passport_ids=files)
-    await message.answer(f"Фото сохранено ({len(files)}). Ещё фото или «готово».")
+    await message.answer(
+        f"Фото сохранено ({len(files)}). Ещё фото или «Готово».",
+        reply_markup=passport_kb(),
+    )
 
 
 @router.message(BookingForm.pet_passport)
 async def passport_done(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip().lower()
-    if text not in {"готово", "далее", "ok", "ок"}:
-        await message.answer("Пришлите фото или напишите «готово».")
+    if text not in {"готово", "далее", "ok", "ок", "без фото", "пропустить"}:
+        await message.answer(
+            "Пришлите фото паспорта или нажмите «Готово».\n"
+            "Если фото нет — «Без фото» (заявка уйдёт владельцу как неполная).",
+            reply_markup=passport_kb(),
+        )
         return
 
     data = await state.get_data()
+    passport_ids = list(data.get("draft_passport_ids") or [])
+    incomplete_flags = list(data.get("placement_flags") or [])
+    if not passport_ids:
+        incomplete_flags.append(f"incomplete_passport:{data.get('draft_name') or '?'}")
+        await message.answer(
+            "Фото паспорта нет — помечу заявку как неполную для владельца."
+        )
+
     kind = PetKind(data["draft_kind"])
     age_months = data.get("draft_age_months")
     pet = PetProfile(
@@ -362,12 +516,13 @@ async def passport_done(message: Message, state: FSMContext) -> None:
         parasite_treated=data.get("draft_parasite"),
         behavior=BehaviorFlags.model_validate(data.get("draft_behavior") or {}),
         health_notes=data.get("draft_health"),
-        passport_file_ids=list(data.get("draft_passport_ids") or []),
+        passport_file_ids=passport_ids,
     )
     pets = list(data.get("pets") or [])
     pets.append(pet.model_dump(mode="json"))
     await state.update_data(
         pets=pets,
+        placement_flags=sorted(set(incomplete_flags)),
         draft_kind=None,
         draft_name=None,
         draft_breed=None,
@@ -551,7 +706,8 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
         except Exception:
             pass
         await callback.message.answer(
-            "Есть промокод? Пришлите его или напишите «нет»."
+            "Есть промокод? Пришлите его или нажмите «Нет».",
+            reply_markup=no_kb(),
         )
         await callback.answer()
         return

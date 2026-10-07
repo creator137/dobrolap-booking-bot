@@ -60,12 +60,21 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
     flags = booking.payload.get("placement_flags") or []
     if flags:
         lines.append("Флаги: " + ", ".join(flags))
+    if any(str(f).startswith("incomplete_passport") for f in flags):
+        lines.append("⚠️ Анкета неполная: нет фото ветпаспорта")
+    if booking.hold_expires_at is not None:
+        lines.append(f"Резерв до: {booking.hold_expires_at.isoformat()}")
+    refund = booking.payload.get("refund") or {}
+    if refund.get("status"):
+        lines.append(f"Возврат залога: {refund.get('status')}")
+        if refund.get("note"):
+            lines.append(f"  комментарий: {refund['note']}")
     if booking.price_total is not None:
         lines.append(f"Предварительно: {booking.price_total} ₽")
     if booking.deposit_amount is not None:
         lines.append(f"Залог: {booking.deposit_amount} ₽")
     if booking.payload.get("quote_provisional"):
-        lines.append("⚠️ Часть сумм ориентировочная")
+        lines.append("⚠️ Часть сумм ориентировочная — подтвердите вручную")
     if booking.payload.get("quote_explanation"):
         lines.append(str(booking.payload["quote_explanation"]))
     return "\n".join(lines)

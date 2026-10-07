@@ -18,6 +18,7 @@
 | 7 | Optional LLM | stub готов, выключен |
 | 8 | Docker-образ | ✅ Dockerfile |
 | 9 | Review fixes: fail-closed, фото+цена, возраст/виды, dog hard-filters, промо, чек после рестарта | ✅ |
+| 10 | RELEASE_PLAN §1–2: отмена после оплаты, hold/expire, FSM SQLite, audit | ✅ код; этап 4–5 — испытания |
 
 Инструкция владельцу по таблице: [OWNER_SETUP.md](OWNER_SETUP.md).
 

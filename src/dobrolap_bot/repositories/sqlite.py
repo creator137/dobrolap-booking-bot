@@ -32,13 +32,21 @@ CREATE TABLE IF NOT EXISTS bookings (
     owner_note TEXT,
     sheet_external_id TEXT,
     payload_json TEXT NOT NULL DEFAULT '{}',
+    hold_expires_at TEXT,
+    last_reminder_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
 CREATE INDEX IF NOT EXISTS idx_bookings_customer ON bookings(customer_id);
+CREATE INDEX IF NOT EXISTS idx_bookings_hold ON bookings(status, hold_expires_at);
 """
+
+MIGRATIONS = [
+    "ALTER TABLE bookings ADD COLUMN hold_expires_at TEXT",
+    "ALTER TABLE bookings ADD COLUMN last_reminder_at TEXT",
+]
 
 
 def _utcnow() -> datetime:
@@ -58,6 +66,8 @@ class BookingRecord:
     owner_note: str | None
     sheet_external_id: str | None
     payload: dict = field(default_factory=dict)
+    hold_expires_at: datetime | None = None
+    last_reminder_at: datetime | None = None
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)
     customer_telegram_id: int | None = None
@@ -74,6 +84,11 @@ class SqliteRepository:
         self._db = await aiosqlite.connect(self.path)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
+        for sql in MIGRATIONS:
+            try:
+                await self._db.execute(sql)
+            except aiosqlite.OperationalError:
+                pass  # column already exists
         await self._db.commit()
 
     async def close(self) -> None:
@@ -148,8 +163,9 @@ class SqliteRepository:
             INSERT INTO bookings (
                 id, customer_id, date_from, date_to, status, unit_id,
                 price_total, deposit_amount, owner_note, sheet_external_id,
-                payload_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                payload_json, hold_expires_at, last_reminder_at,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 date_from=excluded.date_from,
                 date_to=excluded.date_to,
@@ -160,6 +176,8 @@ class SqliteRepository:
                 owner_note=excluded.owner_note,
                 sheet_external_id=excluded.sheet_external_id,
                 payload_json=excluded.payload_json,
+                hold_expires_at=excluded.hold_expires_at,
+                last_reminder_at=excluded.last_reminder_at,
                 updated_at=excluded.updated_at
             """,
             (
@@ -174,11 +192,59 @@ class SqliteRepository:
                 record.owner_note,
                 record.sheet_external_id,
                 json.dumps(record.payload, ensure_ascii=False),
+                record.hold_expires_at.isoformat() if record.hold_expires_at else None,
+                record.last_reminder_at.isoformat() if record.last_reminder_at else None,
                 record.created_at.isoformat(),
                 record.updated_at.isoformat(),
             ),
         )
         await self.db.commit()
+
+    async def save_booking_if_status(
+        self, record: BookingRecord, *, expected_status: BookingStatus
+    ) -> bool:
+        """Atomic status write. Returns False if status changed concurrently."""
+        cur = await self.db.execute(
+            """
+            UPDATE bookings SET
+                date_from=?, date_to=?, status=?, unit_id=?,
+                price_total=?, deposit_amount=?, owner_note=?, sheet_external_id=?,
+                payload_json=?, hold_expires_at=?, last_reminder_at=?, updated_at=?
+            WHERE id=? AND status=?
+            """,
+            (
+                record.date_from.isoformat(),
+                record.date_to.isoformat(),
+                record.status.value,
+                record.unit_id,
+                record.price_total,
+                record.deposit_amount,
+                record.owner_note,
+                record.sheet_external_id,
+                json.dumps(record.payload, ensure_ascii=False),
+                record.hold_expires_at.isoformat() if record.hold_expires_at else None,
+                record.last_reminder_at.isoformat() if record.last_reminder_at else None,
+                record.updated_at.isoformat(),
+                record.id,
+                expected_status.value,
+            ),
+        )
+        await self.db.commit()
+        return cur.rowcount > 0
+
+    async def list_waiting_payment_holds(self) -> list[BookingRecord]:
+        cur = await self.db.execute(
+            """
+            SELECT b.*, c.telegram_user_id AS customer_telegram_id, c.name AS customer_name
+            FROM bookings b
+            JOIN customers c ON c.id = b.customer_id
+            WHERE b.status = ?
+            ORDER BY CASE WHEN b.hold_expires_at IS NULL THEN 1 ELSE 0 END,
+                     b.hold_expires_at ASC
+            """,
+            (BookingStatus.WAITING_PAYMENT.value,),
+        )
+        return [self._from_row(row) for row in await cur.fetchall()]
 
     async def get_booking(self, booking_id: str) -> BookingRecord | None:
         cur = await self.db.execute(
@@ -235,6 +301,13 @@ class SqliteRepository:
 
     def _from_row(self, row: aiosqlite.Row) -> BookingRecord:
         keys = row.keys()
+
+        def _dt(col: str) -> datetime | None:
+            if col not in keys:
+                return None
+            raw = row[col]
+            return datetime.fromisoformat(raw) if raw else None
+
         return BookingRecord(
             id=row["id"],
             customer_id=row["customer_id"],
@@ -247,6 +320,8 @@ class SqliteRepository:
             owner_note=row["owner_note"],
             sheet_external_id=row["sheet_external_id"],
             payload=json.loads(row["payload_json"] or "{}"),
+            hold_expires_at=_dt("hold_expires_at"),
+            last_reminder_at=_dt("last_reminder_at"),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             customer_telegram_id=(

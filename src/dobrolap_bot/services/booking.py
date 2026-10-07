@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from dobrolap_bot.config.loader import Catalog
@@ -75,13 +75,39 @@ class BookingService:
         repo: SqliteRepository,
         catalog: Catalog,
         sheets: SheetsGateway,
+        hold_hours: float = 24.0,
     ) -> None:
         self.repo = repo
         self.catalog = catalog
         self.sheets = sheets
         self.placement = PlacementService(catalog)
         self.pricing = PricingService(catalog)
+        self.hold_hours = hold_hours
         self._lifecycle_lock = asyncio.Lock()
+
+    @staticmethod
+    def _append_audit(
+        payload: dict[str, Any],
+        *,
+        action: str,
+        from_status: str | None,
+        to_status: str | None,
+        actor: str = "system",
+        detail: str | None = None,
+    ) -> dict[str, Any]:
+        events = list(payload.get("audit") or [])
+        events.append(
+            {
+                "at": _utcnow().isoformat(),
+                "action": action,
+                "from": from_status,
+                "to": to_status,
+                "actor": actor,
+                "detail": detail,
+            }
+        )
+        # Keep last 50 events — enough for ops, no PII beyond booking ids/status.
+        return {**payload, "audit": events[-50:]}
 
     def sheet_labels(self, unit_id: str) -> list[str]:
         """Calendar row label(s) for a catalog unit (pool-aware)."""
@@ -232,11 +258,25 @@ class BookingService:
         price_total: int | None = None,
         deposit_amount: int | None = None,
         owner_note: str | None = None,
+        actor: str = "system",
+        expected_status: BookingStatus | None = None,
+        clear_hold: bool = False,
     ) -> BookingRecord:
-        booking.status = transition(booking.status, new_status)
+        previous = booking.status
+        transition(previous, new_status)
+        expected = expected_status or previous
+        booking.status = new_status
         booking.updated_at = _utcnow()
+        payload = dict(booking.payload)
         if extra_payload:
-            booking.payload = {**booking.payload, **extra_payload}
+            payload.update(extra_payload)
+        booking.payload = self._append_audit(
+            payload,
+            action="status",
+            from_status=previous.value,
+            to_status=new_status.value,
+            actor=actor,
+        )
         if unit_id is not None:
             booking.unit_id = unit_id
         if price_total is not None:
@@ -245,7 +285,14 @@ class BookingService:
             booking.deposit_amount = deposit_amount
         if owner_note is not None:
             booking.owner_note = owner_note
-        await self.repo.save_booking(booking)
+        if clear_hold:
+            booking.hold_expires_at = None
+            booking.last_reminder_at = None
+        ok = await self.repo.save_booking_if_status(booking, expected_status=expected)
+        if not ok:
+            raise InvalidTransitionError(
+                f"concurrent status change: expected {expected.value}, booking {booking.id}"
+            )
         return booking
 
     async def approve(self, booking_id: str) -> BookingRecord:
@@ -277,48 +324,97 @@ class BookingService:
                 raise ValueError("unit_occupied_on_approve") from exc
             raise
 
+        now = _utcnow()
         booking.status = BookingStatus.WAITING_PAYMENT
-        booking.payload = {**booking.payload, "sheet_label": sheet_label}
-        booking.updated_at = _utcnow()
+        booking.hold_expires_at = now + timedelta(hours=self.hold_hours)
+        booking.last_reminder_at = None
+        booking.payload = self._append_audit(
+            {**booking.payload, "sheet_label": sheet_label},
+            action="approve_hold",
+            from_status=BookingStatus.WAITING_OWNER.value,
+            to_status=BookingStatus.WAITING_PAYMENT.value,
+            actor="owner",
+            detail=f"hold_until={booking.hold_expires_at.isoformat()}",
+        )
+        booking.updated_at = now
         try:
-            await self.repo.save_booking(booking)
+            ok = await self.repo.save_booking_if_status(
+                booking, expected_status=BookingStatus.WAITING_OWNER
+            )
+            if not ok:
+                self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
+                raise InvalidTransitionError("concurrent status change on approve")
         except Exception:
             self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
             raise
         return booking
 
     async def reject(self, booking_id: str, reason: str | None = None) -> BookingRecord:
-        booking = await self._require(booking_id)
-        booking = await self._set_status(
-            booking,
-            BookingStatus.OWNER_REJECTED,
-            owner_note=reason,
-            extra_payload={"reject_reason": reason},
-        )
-        held = booking.payload.get("sheet_label")
-        self.sheets.release_booking(
-            booking_id=booking.id,
-            unit_id=held or (self.sheet_label(booking.unit_id) if booking.unit_id else None),
-        )
-        return booking
-
-    async def cancel(self, booking_id: str, reason: str | None = None) -> BookingRecord:
         async with self._lifecycle_lock:
-            return await self._cancel(booking_id, reason)
+            booking = await self._require(booking_id)
+            if booking.status != BookingStatus.WAITING_OWNER:
+                raise InvalidTransitionError(
+                    f"reject only from WAITING_OWNER, got {booking.status}"
+                )
+            booking = await self._set_status(
+                booking,
+                BookingStatus.OWNER_REJECTED,
+                owner_note=reason,
+                extra_payload={"reject_reason": reason},
+                actor="owner",
+            )
+            held = booking.payload.get("sheet_label")
+            self.sheets.release_booking(
+                booking_id=booking.id,
+                unit_id=held or (self.sheet_label(booking.unit_id) if booking.unit_id else None),
+            )
+            return booking
 
-    async def _cancel(self, booking_id: str, reason: str | None = None) -> BookingRecord:
+    async def cancel(
+        self,
+        booking_id: str,
+        reason: str | None = None,
+        *,
+        actor: str = "system",
+        refund_pending: bool = False,
+    ) -> BookingRecord:
+        async with self._lifecycle_lock:
+            return await self._cancel(
+                booking_id, reason, actor=actor, refund_pending=refund_pending
+            )
+
+    async def _cancel(
+        self,
+        booking_id: str,
+        reason: str | None = None,
+        *,
+        actor: str = "system",
+        refund_pending: bool = False,
+    ) -> BookingRecord:
         booking = await self._require(booking_id)
+        if booking.status == BookingStatus.CANCELLED:
+            return booking
         original_status = booking.status
         transition(booking.status, BookingStatus.CANCELLED)
         held = booking.payload.get("sheet_label")
         if held:
             self.sheets.release_booking(booking_id=booking.id, unit_id=held)
+        extra: dict[str, Any] = {"cancel_reason": reason}
+        if refund_pending or original_status == BookingStatus.CONFIRMED:
+            extra["refund"] = {
+                "status": "pending",
+                "note": None,
+                "at": None,
+            }
         try:
             booking = await self._set_status(
                 booking,
                 BookingStatus.CANCELLED,
                 owner_note=reason,
-                extra_payload={"cancel_reason": reason},
+                extra_payload=extra,
+                actor=actor,
+                expected_status=original_status,
+                clear_hold=True,
             )
         except Exception:
             if held:
@@ -331,6 +427,76 @@ class BookingService:
                 )
             raise
         return booking
+
+    async def mark_refund(
+        self, booking_id: str, note: str | None = None
+    ) -> BookingRecord:
+        async with self._lifecycle_lock:
+            booking = await self._require(booking_id)
+            if booking.status != BookingStatus.CANCELLED:
+                raise InvalidTransitionError("refund mark only after CANCELLED")
+            refund = dict(booking.payload.get("refund") or {})
+            refund.update(
+                {
+                    "status": "done",
+                    "note": note,
+                    "at": _utcnow().isoformat(),
+                }
+            )
+            booking.payload = self._append_audit(
+                {**booking.payload, "refund": refund},
+                action="refund_marked",
+                from_status=booking.status.value,
+                to_status=booking.status.value,
+                actor="owner",
+                detail=note,
+            )
+            booking.updated_at = _utcnow()
+            await self.repo.save_booking(booking)
+            return booking
+
+    async def expire_hold(self, booking_id: str) -> BookingRecord | None:
+        """Expire WAITING_PAYMENT hold. Returns None if race lost / not expired."""
+        async with self._lifecycle_lock:
+            booking = await self._require(booking_id)
+            if booking.status != BookingStatus.WAITING_PAYMENT:
+                return None
+            if booking.hold_expires_at is None or booking.hold_expires_at > _utcnow():
+                return None
+            held = booking.payload.get("sheet_label")
+            if held:
+                self.sheets.release_booking(booking_id=booking.id, unit_id=held)
+            try:
+                return await self._set_status(
+                    booking,
+                    BookingStatus.EXPIRED,
+                    extra_payload={"expire_reason": "hold_timeout"},
+                    actor="hold_watcher",
+                    expected_status=BookingStatus.WAITING_PAYMENT,
+                    clear_hold=True,
+                )
+            except Exception:
+                if held:
+                    self.sheets.reserve_booking(
+                        booking_id=booking.id,
+                        unit_id=held,
+                        date_from=booking.date_from,
+                        date_to=booking.date_to,
+                        status=BookingStatus.WAITING_PAYMENT.value,
+                    )
+                raise
+
+    async def mark_hold_reminder_sent(self, booking_id: str) -> BookingRecord | None:
+        async with self._lifecycle_lock:
+            booking = await self._require(booking_id)
+            if booking.status != BookingStatus.WAITING_PAYMENT:
+                return None
+            booking.last_reminder_at = _utcnow()
+            booking.updated_at = booking.last_reminder_at
+            ok = await self.repo.save_booking_if_status(
+                booking, expected_status=BookingStatus.WAITING_PAYMENT
+            )
+            return booking if ok else None
 
     async def add_owner_question(self, booking_id: str, text: str) -> BookingRecord:
         booking = await self._require(booking_id)
@@ -451,7 +617,13 @@ class BookingService:
             date_to=booking.date_to,
             status=BookingStatus.CONFIRMED.value,
         )
-        return await self._set_status(booking, BookingStatus.CONFIRMED)
+        return await self._set_status(
+            booking,
+            BookingStatus.CONFIRMED,
+            actor="owner",
+            expected_status=BookingStatus.WAITING_PAYMENT,
+            clear_hold=True,
+        )
 
     async def _require(self, booking_id: str) -> BookingRecord:
         booking = await self.repo.get_booking(booking_id)
