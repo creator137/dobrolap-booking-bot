@@ -114,19 +114,20 @@ class PricingService:
                 )
             )
 
-        # Services — use lower bound of range as provisional quote
+        # Services — lower bound of range; multiply by nights for per_day units
         for sid in service_ids or []:
             svc = self.catalog.get_service(sid)
             if svc is None or not svc.active:
                 continue
-            amount, svc_provisional = self._service_amount(svc)
+            amount, svc_provisional, detail = self._service_amount(svc, nights=nights)
             provisional = provisional or svc_provisional
+            note = ", ".join(x for x in [svc.notes, detail] if x)
             lines.append(
                 QuoteLine(
                     scope=PriceScope.SERVICE,
                     label=svc.name,
                     amount_rub=amount,
-                    detail=svc.notes,
+                    detail=note or None,
                     provisional=svc_provisional,
                 )
             )
@@ -206,14 +207,27 @@ class PricingService:
             )
         return 0, True, "Цена не задана"
 
-    def _service_amount(self, svc: ServiceOffering) -> tuple[int, bool]:
+    def _service_amount(
+        self, svc: ServiceOffering, *, nights: int
+    ) -> tuple[int, bool, str | None]:
+        base: int | None = None
+        provisional = False
         if svc.price_from_rub is not None and svc.price_to_rub is not None:
-            if svc.price_from_rub != svc.price_to_rub:
-                return svc.price_from_rub, True
-            return svc.price_from_rub, False
-        if svc.price_from_rub is not None:
-            return svc.price_from_rub, True
-        return 0, True
+            base = svc.price_from_rub
+            provisional = svc.price_from_rub != svc.price_to_rub
+        elif svc.price_from_rub is not None:
+            base = svc.price_from_rub
+            provisional = True
+        else:
+            return 0, True, "Цена не задана"
+
+        unit = (svc.unit or "once").lower()
+        if unit in {"per_day", "day", "сутки", "сут"}:
+            return base * max(nights, 1), provisional, f"{base} ₽ × {nights} сут."
+        if unit in {"visit", "session", "one_way", "once", "unclear"}:
+            # Quantity UI not collected yet — quote one unit; mark unclear as provisional.
+            return base, provisional or unit == "unclear", f"единица: {unit}"
+        return base, True, f"неизвестная единица тарификации: {unit}"
 
     def _apply_discounts(
         self,

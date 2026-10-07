@@ -1,19 +1,26 @@
-"""Live Google Sheets gateway (optional dependency).
+"""Service-account reader/writer for the grid occupancy calendar (Лист1).
 
-Install: pip install google-api-python-client google-auth
-Enable: GOOGLE_SHEETS_ENABLED=true + service account file + spreadsheet share.
+READ uses the real prod layout (A category / B room / C+ dates).
+WRITE is gated by Settings / readonly flag — do not enable against prod
+until the owner confirms.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from dobrolap_bot.integrations.google_sheets import SheetBooking, dates_overlap
+from dobrolap_bot.integrations.google_sheets import SheetBooking, SheetsUnavailableError
+from dobrolap_bot.integrations.grid_calendar import (
+    cell_text,
+    date_columns,
+    is_occupied_cell,
+    iter_room_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +34,14 @@ class GoogleSheetsGateway:
         spreadsheet_id: str,
         credentials_file: Path,
         mapping_path: Path,
+        readonly: bool = True,
     ) -> None:
         try:
             from google.oauth2 import service_account
             from googleapiclient.discovery import build
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError(
-                "Install google-api-python-client and google-auth for live Sheets"
+                "Install extras: pip install -e '.[sheets]'"
             ) from exc
 
         if not spreadsheet_id:
@@ -43,10 +51,15 @@ class GoogleSheetsGateway:
 
         mapping = yaml.safe_load(mapping_path.read_text(encoding="utf-8")) or {}
         self.spreadsheet_id = spreadsheet_id
-        self.sheet_name = mapping.get("sheet_name", "Bookings")
-        self.columns: dict[str, str] = mapping.get("columns", {})
-        self.date_format = mapping.get("date_format", "%Y-%m-%d")
+        self.sheet_name = (
+            mapping.get("calendar_sheet_name") or mapping.get("sheet_name") or "Лист1"
+        )
         self.header_row = int(mapping.get("header_row", 1))
+        self.first_data_row = int(mapping.get("first_data_row", 2))
+        self.category_col = int(mapping.get("category_col", 1))
+        self.room_col = int(mapping.get("room_col", 2))
+        self.first_date_col = int(mapping.get("first_date_col", 3))
+        self.readonly = readonly
 
         creds = service_account.Credentials.from_service_account_file(
             str(credentials_file),
@@ -54,69 +67,55 @@ class GoogleSheetsGateway:
         )
         self._service = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
-    def _col_letter(self, key: str) -> str:
-        letter = self.columns.get(key)
-        if not letter:
-            raise KeyError(f"sheets mapping missing column for {key}")
-        return letter
+    def _values(self) -> list[list[Any]]:
+        range_name = f"'{self.sheet_name}'!A:ZZ"
+        try:
+            result = (
+                self._service.spreadsheets()
+                .values()
+                .get(
+                    spreadsheetId=self.spreadsheet_id,
+                    range=range_name,
+                    valueRenderOption="UNFORMATTED_VALUE",
+                )
+                .execute()
+            )
+        except Exception as exc:
+            raise SheetsUnavailableError(f"sheets_read_failed: {exc}") from exc
+        return result.get("values", [])
 
-    def _parse_date(self, value: str) -> date | None:
-        value = (value or "").strip()
-        if not value:
-            return None
-        for fmt in (self.date_format, "%d.%m.%Y", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(value, fmt).date()
-            except ValueError:
-                continue
-        return None
+    def _rooms(self, values: list[list[Any]]) -> list[tuple[int, str]]:
+        return iter_room_rows(
+            values,
+            first_data_row=self.first_data_row,
+            category_col=self.category_col,
+            room_col=self.room_col,
+        )
 
     def list_bookings(self) -> list[SheetBooking]:
-        range_name = f"'{self.sheet_name}'!A:Z"
-        result = (
-            self._service.spreadsheets()
-            .values()
-            .get(spreadsheetId=self.spreadsheet_id, range=range_name)
-            .execute()
-        )
-        values: list[list[Any]] = result.get("values", [])
-        if len(values) <= self.header_row:
+        values = self._values()
+        if len(values) < self.first_data_row:
             return []
-
-        # Build index from header if present, else use configured letters as 0-based
-        header = values[self.header_row - 1] if values else []
-        col_index = {name: idx for idx, name in enumerate(header)}
-
-        def cell(row: list[Any], key: str) -> str:
-            letter = self._col_letter(key)
-            # Prefer header name match if headers look like keys
-            if key in col_index:
-                idx = col_index[key]
-            else:
-                idx = ord(letter.upper()) - ord("A")
-            if idx >= len(row):
-                return ""
-            return str(row[idx]).strip()
-
-        rows: list[SheetBooking] = []
-        for raw in values[self.header_row :]:
-            external_id = cell(raw, "external_id")
-            unit_id = cell(raw, "unit_id")
-            d_from = self._parse_date(cell(raw, "date_from"))
-            d_to = self._parse_date(cell(raw, "date_to"))
-            status = cell(raw, "status") or "CONFIRMED"
-            if not external_id or not unit_id or not d_from or not d_to:
-                continue
-            rows.append(
-                SheetBooking(
-                    external_id=external_id,
-                    unit_id=unit_id,
-                    date_from=d_from,
-                    date_to=d_to,
-                    status=status,
+        header = values[self.header_row - 1]
+        dates = date_columns(header, first_date_col=self.first_date_col)
+        out: list[SheetBooking] = []
+        for row_idx, room in self._rooms(values):
+            row = values[row_idx]
+            for col_idx, d in dates:
+                cell = cell_text(row, col_idx)
+                if not cell:
+                    continue
+                bid = _extract_booking_id(cell) or f"manual:{room}:{d.isoformat()}"
+                out.append(
+                    SheetBooking(
+                        external_id=bid,
+                        unit_id=room,
+                        date_from=d,
+                        date_to=d + timedelta(days=1),
+                        status="CONFIRMED",
+                    )
                 )
-            )
-        return rows
+        return out
 
     def occupied_unit_ids(
         self,
@@ -125,15 +124,112 @@ class GoogleSheetsGateway:
         *,
         exclude_booking_id: str | None = None,
     ) -> set[str]:
+        values = self._values()
+        if len(values) < self.first_data_row:
+            return set()
+        header = values[self.header_row - 1]
+        cols = date_columns(
+            header,
+            first_date_col=self.first_date_col,
+            date_from=date_from,
+            date_to=date_to,
+        )
         occupied: set[str] = set()
-        for row in self.list_bookings():
-            if exclude_booking_id and row.external_id == exclude_booking_id:
-                continue
-            if row.status.upper() in {"CANCELLED", "REJECTED", "EXPIRED", "OWNER_REJECTED"}:
-                continue
-            if dates_overlap(date_from, date_to, row.date_from, row.date_to):
-                occupied.add(row.unit_id)
+        for row_idx, room in self._rooms(values):
+            row = values[row_idx]
+            for col_idx, _d in cols:
+                if is_occupied_cell(cell_text(row, col_idx), exclude_booking_id):
+                    occupied.add(room)
+                    break
         return occupied
+
+    def _ensure_writable(self) -> None:
+        if self.readonly:
+            raise SheetsUnavailableError(
+                "sheets_readonly: write disabled (prod calendar). "
+                "Set GOOGLE_SHEETS_READONLY=false only when ready."
+            )
+
+    def reserve_booking(
+        self,
+        *,
+        booking_id: str,
+        unit_id: str,
+        date_from: date,
+        date_to: date,
+        status: str,
+    ) -> SheetBooking:
+        self._ensure_writable()
+        values = self._values()
+        header = values[self.header_row - 1] if values else []
+        rooms = self._rooms(values)
+        row_idx = next(
+            (r for r, label in rooms if label.lower() == unit_id.strip().lower()),
+            None,
+        )
+        if row_idx is None:
+            raise ValueError(f"unknown_room:{unit_id}")
+
+        cols = date_columns(
+            header,
+            first_date_col=self.first_date_col,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if not cols:
+            raise SheetsUnavailableError("no_date_columns_for_range")
+
+        for col_idx, _d in cols:
+            if is_occupied_cell(cell_text(values[row_idx], col_idx), booking_id):
+                raise ValueError("unit_occupied")
+
+        mark = f"{status}:{booking_id}"
+        data = [
+            {
+                "range": f"'{self.sheet_name}'!{_a1(row_idx + 1, col_idx + 1)}",
+                "values": [[mark]],
+            }
+            for col_idx, _d in cols
+        ]
+        try:
+            self._service.spreadsheets().values().batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body={"valueInputOption": "USER_ENTERED", "data": data},
+            ).execute()
+        except Exception as exc:
+            raise SheetsUnavailableError(f"sheets_write_failed: {exc}") from exc
+
+        return SheetBooking(booking_id, unit_id, date_from, date_to, status)
+
+    def release_booking(self, *, booking_id: str, unit_id: str | None = None) -> None:
+        self._ensure_writable()
+        values = self._values()
+        if len(values) < self.first_data_row:
+            return
+        rooms = {r: label for r, label in self._rooms(values)}
+        clears = []
+        for row_idx, label in rooms.items():
+            if unit_id and label.lower() != unit_id.strip().lower():
+                continue
+            row = values[row_idx]
+            for c in range(self.first_date_col - 1, len(row)):
+                cell = cell_text(row, c)
+                if booking_id in cell:
+                    clears.append(
+                        {
+                            "range": f"'{self.sheet_name}'!{_a1(row_idx + 1, c + 1)}",
+                            "values": [[""]],
+                        }
+                    )
+        if not clears:
+            return
+        try:
+            self._service.spreadsheets().values().batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body={"valueInputOption": "USER_ENTERED", "data": clears},
+            ).execute()
+        except Exception as exc:
+            raise SheetsUnavailableError(f"sheets_release_failed: {exc}") from exc
 
     def upsert_booking(
         self,
@@ -144,42 +240,36 @@ class GoogleSheetsGateway:
         date_to: date,
         status: str,
     ) -> SheetBooking:
-        existing = self.list_bookings()
-        row_number = None
-        for idx, row in enumerate(existing, start=self.header_row + 1):
-            if row.external_id == booking_id:
-                row_number = idx
-                break
-
-        values = [[
-            booking_id,
-            unit_id,
-            date_from.strftime(self.date_format),
-            date_to.strftime(self.date_format),
-            status,
-        ]]
-        if row_number is None:
-            self._service.spreadsheets().values().append(
-                spreadsheetId=self.spreadsheet_id,
-                range=f"'{self.sheet_name}'!A:E",
-                valueInputOption="USER_ENTERED",
-                insertDataOption="INSERT_ROWS",
-                body={"values": values},
-            ).execute()
-            logger.info("Appended booking %s to Sheets", booking_id)
-        else:
-            self._service.spreadsheets().values().update(
-                spreadsheetId=self.spreadsheet_id,
-                range=f"'{self.sheet_name}'!A{row_number}:E{row_number}",
-                valueInputOption="USER_ENTERED",
-                body={"values": values},
-            ).execute()
-            logger.info("Updated booking %s row %s in Sheets", booking_id, row_number)
-
-        return SheetBooking(
-            external_id=booking_id,
+        if status.upper() in {"CANCELLED", "REJECTED", "EXPIRED", "OWNER_REJECTED"}:
+            self.release_booking(booking_id=booking_id, unit_id=unit_id)
+            return SheetBooking(booking_id, unit_id, date_from, date_to, status)
+        return self.reserve_booking(
+            booking_id=booking_id,
             unit_id=unit_id,
             date_from=date_from,
             date_to=date_to,
             status=status,
         )
+
+
+def _extract_booking_id(cell: str) -> str | None:
+    import re
+
+    m = re.search(
+        r"(?:HOLD|WAITING_PAYMENT|CONFIRMED|OWNER_APPROVED):([A-Za-z0-9_-]+)",
+        cell,
+    )
+    return m.group(1) if m else None
+
+
+def _a1(row_1based: int, col_1based: int) -> str:
+    n = col_1based
+    letters = ""
+    while n:
+        n, rem = divmod(n - 1, 26)
+        letters = chr(65 + rem) + letters
+    return f"{letters}{row_1based}"
+
+
+# Re-export for tests
+__all__ = ["GoogleSheetsGateway", "parse_header_date"]

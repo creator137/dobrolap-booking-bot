@@ -1,47 +1,59 @@
-# Что попросить у владельца (доступ к таблице)
+# Что попросить у владельца (календарь Лист1)
 
-Бот ходит в Google Sheets **через Apps Script Web App** — без service account и без шаринга таблицы на ИИ.
+Бот читает **реальный календарь занятости** (лист `Лист1`):
+- колонка A — категория, B — комната/номер, C+ — даты;
+- ручные пометки хозяйки учитываются;
+- против прода по умолчанию `GOOGLE_SHEETS_READONLY=true` (запись выключена).
 
-Готовый код: [`integrations/apps_script/Code.gs`](../integrations/apps_script/Code.gs).
+Готовый скрипт: [`integrations/apps_script/Code.gs`](../integrations/apps_script/Code.gs)
+(Apps Script Web App + `LockService` для атомарного reserve).
 
-## Что сделать владельцу (5–10 минут)
+Альтернатива: service account JSON + `GOOGLE_SHEETS_SPREADSHEET_ID`
+(тот же grid-формат; атомарность слабее, чем у Apps Script).
+
+## Обязательно у владельца
 
 1. Открыть таблицу «Размещение добролап».
-2. **Расширения → Apps Script** → вставить `Code.gs` → сохранить.
-3. В скрипте заменить `SCRIPT_TOKEN` на длинный секрет (тот же в `.env` как `GAS_WEBAPP_TOKEN`).
-4. **Deploy → New deployment → Web app**
-   - Execute as: **Me**
-   - Who has access: **Anyone**
-5. Скопировать URL web app → в `.env`:
+2. **Расширения → Apps Script** → вставить `Code.gs`.
+3. Проверить `CALENDAR_SHEET = "Лист1"` (или фактическое имя листа-календаря).
+4. Задать `SCRIPT_TOKEN` (длинный секрет).
+5. Deploy → Web app → Execute as **Me**, Who has access: **Anyone**.
+6. Прислать URL + token → в `.env`:
    ```env
    GOOGLE_SHEETS_ENABLED=true
    GAS_WEBAPP_URL=https://script.google.com/macros/s/.../exec
-   GAS_WEBAPP_TOKEN=тот_же_секрет
+   GAS_WEBAPP_TOKEN=секрет
    ```
-6. При первом `upsert` скрипт сам создаст лист `Bookings` с колонками:
-   `external_id | unit_id | date_from | date_to | status`
+7. Сверить, что названия комнат в колонке A совпадают с `sheet_unit_id`
+   в `config/accommodations.yaml` (сейчас = русские имена из каталога).
+   Если в таблице другие подписи — прислать список строк A, подправим mapping.
 
-Если календарь уже на другом листе — в `Code.gs` поменять `SHEET_NAME` и при необходимости порядок колонок.
+### Либо через service account
 
-## Что ещё дать для запуска бота (не таблица)
+1. Расшарить таблицу на email сервисного аккаунта (Редактор).
+2. Прислать spreadsheet ID из URL.
+3. В `.env`:
+   ```env
+   GOOGLE_SHEETS_ENABLED=true
+   GOOGLE_SHEETS_SPREADSHEET_ID=...
+   GOOGLE_SERVICE_ACCOUNT_FILE=secrets/google-service-account.json
+   ```
 
-| Поле `.env` | Откуда |
+Если `GOOGLE_SHEETS_ENABLED=true`, но доступ не настроен — бот **не** показывает
+свободные места (fail-closed), а не притворяется, что всё свободно.
+
+## Для запуска бота
+
+| Поле | Откуда |
 |---|---|
 | `BOT_TOKEN` | @BotFather |
-| `OWNER_CHAT_ID` | numeric id чата владельца (можно узнать у `@userinfobot`) |
-| `PAYMENT_INSTRUCTIONS` | текст реквизитов для залога |
+| `OWNER_CHAT_ID` | numeric id (@userinfobot) |
+| `PAYMENT_INSTRUCTIONS` | текст реквизитов залога |
 
-## Если «доступа к таблице нет» у разработчика
+## Позже уточнить (не блокирует старт)
 
-Это нормально. Достаточно, чтобы **владелец** вставил скрипт в *свою* таблицу и прислал только:
-- URL web app
-- token
-
-Структуру старого календаря смотреть не обязательно: бот пишет/читает нормализованный лист `Bookings`.
-
-## Позже уточнить у владельца (не блокирует запуск)
-
-- граница крупной собаки: 20 vs 25 кг  
-- VIP vs VIP+, фото `А+А` / `unknown`  
-- праздники / early booking / soft-hold TTL  
-- единица тарифа натурального питания (150–250 ₽)
+- точные подписи строк комнат в Лист1  
+- граница крупной собаки 20 vs 25 кг, VIP vs VIP+  
+- праздники / early booking / реальный промокод  
+- единица натурального питания 150–250 ₽  
+- количество выгулов/зоотакси в анкете  

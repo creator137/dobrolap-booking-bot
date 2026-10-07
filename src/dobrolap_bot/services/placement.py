@@ -12,6 +12,11 @@ from dobrolap_bot.domain.models import (
 # Features that satisfy "no furniture / moisture-resistant" for marking/chewing cats.
 FURNITURE_SAFE_FEATURES = frozenset({"no_furniture", "moisture_resistant", "cage", "enclosure"})
 VIP_TARIFFS = frozenset({"vip", "vip_plus"})
+DOG_PRIVATE_FEATURES = frozenset({"private", "vip", "house", "separate_house"})
+DOG_ACCESS_FEATURES = frozenset({"ground_floor", "balcony", "workshop"})
+DOG_ACCESS_TAGS = frozenset(
+    {"elderly", "incontinence", "treatment", "disability", "loud_barking", "separate_house", "vip"}
+)
 
 
 class PlacementService:
@@ -40,10 +45,8 @@ class PlacementService:
 
         if len(pets) > 1:
             owner_flags.append("multi_pet_group")
-            # Do not assume co-housing is allowed.
             requires_manual = True
 
-        # Small animals: simplified flow → always manual.
         if any(p.kind not in (PetKind.DOG, PetKind.CAT) for p in pets):
             owner_flags.append("non_dog_cat_species")
             requires_manual = True
@@ -54,8 +57,6 @@ class PlacementService:
         if any(f.startswith("needs_review:") for f in owner_flags):
             requires_manual = True
 
-        # Intersection of per-pet candidate sets (for multi-pet we still list
-        # units allowed for *every* pet, but flag manual confirmation).
         per_pet: list[list[PlacementCandidate]] = []
         for pet in pets:
             per_pet.append(self._candidates_for_pet(pet, occupied_unit_ids))
@@ -78,7 +79,6 @@ class PlacementService:
                 owner_flags=owner_flags + ["no_shared_unit_for_group"],
             )
 
-        # Merge scores/reasons from first pet as primary ranking signal.
         by_id = {c.accommodation.id: c for c in per_pet[0]}
         merged: list[PlacementCandidate] = []
         for unit_id in common_ids:
@@ -89,9 +89,6 @@ class PlacementService:
 
         merged.sort(key=lambda c: (-c.score, c.accommodation.name))
         top = merged[:limit]
-
-        if not top:
-            requires_manual = True
 
         return PlacementResult(
             candidates=top,
@@ -119,6 +116,10 @@ class PlacementService:
         pet: PetProfile,
         occupied_unit_ids: set[str],
     ) -> list[PlacementCandidate]:
+        # Untreated parasites → no automatic offer.
+        if pet.parasite_treated is False:
+            return []
+
         out: list[PlacementCandidate] = []
         for unit in self.catalog.active_accommodations():
             if unit.id in occupied_unit_ids:
@@ -139,16 +140,14 @@ class PlacementService:
             if pet.weight_kg > unit.weight_max_kg:
                 return None
 
-        # Hard cat rules
-        if pet.kind == PetKind.CAT:
-            if not self._cat_allowed(pet, unit):
-                return None
+        if pet.kind == PetKind.CAT and not self._cat_allowed(pet, unit):
+            return None
+        if pet.kind == PetKind.DOG and not self._dog_allowed(pet, unit):
+            return None
 
-        # Tariff must exist for this pet class (when rate matrix says unavailable)
         if not self._tariff_offered(pet, unit.tariff_kind):
             return None
 
-        # Ordinary VIP without PDF price: allow listing but force review / no auto quote later
         warnings: list[str] = []
         requires_review = False
         if unit.tariff_kind == "vip":
@@ -158,6 +157,8 @@ class PlacementService:
         score, reasons = self._score(pet, unit)
         if pet.kind not in (PetKind.DOG, PetKind.CAT):
             requires_review = True
+        if pet.kind == PetKind.DOG and self._dog_needs_manual(pet):
+            requires_review = True
 
         return PlacementCandidate(
             accommodation=unit,
@@ -166,6 +167,67 @@ class PlacementService:
             warnings=warnings,
             requires_owner_review=requires_review,
         )
+
+    def _dog_needs_manual(self, pet: PetProfile) -> bool:
+        b = pet.behavior
+        return bool(
+            pet.vaccinated is False
+            or b.aggression
+            or b.high_stress
+            or b.mobility_limited
+            or b.needs_treatment
+            or b.disability
+            or b.loud_barking
+            or b.elderly
+            or b.incontinence
+        )
+
+    def _dog_allowed(self, pet: PetProfile, unit: Accommodation) -> bool:
+        """Hard filters for dogs until owner provides full matrix."""
+        b = pet.behavior
+        features = set(unit.features)
+        tags = set(unit.priority_tags)
+        is_vip = unit.tariff_kind in VIP_TARIFFS
+
+        # No vaccination → VIP only + manual
+        if pet.vaccinated is False and not is_vip:
+            return False
+
+        # Aggression / high stress → private / VIP / separate house only
+        if b.aggression or b.high_stress:
+            if not (is_vip or features & DOG_PRIVATE_FEATURES or "separate_house" in tags):
+                return False
+
+        # Loud barking → separate house / house
+        if b.loud_barking:
+            if not (
+                "separate_house" in tags
+                or "loud_barking" in tags
+                or "house" in features
+                or is_vip
+            ):
+                return False
+
+        # Elderly / incontinence → ground floor / workshop tagged units
+        if b.elderly or b.incontinence:
+            if not (
+                features & {"ground_floor", "workshop"}
+                or tags & {"elderly", "incontinence"}
+                or is_vip
+            ):
+                return False
+
+        # Treatment / disability / mobility → balcony / accessible / VIP
+        if b.needs_treatment or b.disability or b.mobility_limited:
+            if not (
+                features & DOG_ACCESS_FEATURES
+                or tags & DOG_ACCESS_TAGS
+                or "balcony" in features
+                or is_vip
+            ):
+                return False
+
+        return True
 
     def _cat_allowed(self, pet: PetProfile, unit: Accommodation) -> bool:
         b = pet.behavior
@@ -182,7 +244,6 @@ class PlacementService:
             feature_set = set(unit.features)
             if feature_set & FURNITURE_SAFE_FEATURES:
                 return True
-            # private VIP rooms assumed safer / configurable surfaces
             if unit.tariff_kind in VIP_TARIFFS:
                 return True
             if "furniture" in feature_set:
@@ -201,8 +262,6 @@ class PlacementService:
             and (pet.kind != PetKind.DOG or r.size_class == size)
         ]
         if not matches:
-            # No explicit row — allow physical rooms mapped to comfort etc.
-            # only if some rate exists for this tariff+kind (ignore young/size miss → soft allow)
             any_kind = [
                 r
                 for r in self.catalog.daily_rates

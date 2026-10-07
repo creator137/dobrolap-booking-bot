@@ -51,3 +51,25 @@ def test_status_transitions():
         assert False, "expected InvalidTransitionError"
     except InvalidTransitionError:
         pass
+
+
+def test_atomic_reserve_blocks_second():
+    gw = InMemorySheetsGateway()
+    gw.reserve_booking(
+        booking_id="a",
+        unit_id="Комфорт",
+        date_from=date(2026, 11, 1),
+        date_to=date(2026, 11, 5),
+        status="WAITING_PAYMENT",
+    )
+    try:
+        gw.reserve_booking(
+            booking_id="b",
+            unit_id="Комфорт",
+            date_from=date(2026, 11, 2),
+            date_to=date(2026, 11, 4),
+            status="WAITING_PAYMENT",
+        )
+        assert False, "expected unit_occupied"
+    except ValueError as exc:
+        assert "unit_occupied" in str(exc)

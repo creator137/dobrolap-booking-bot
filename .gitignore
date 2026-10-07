@@ -21,6 +21,8 @@ build/
 data/app.db
 data/*.db
 
-# Google service account keys
+# Google service account keys / local secrets dir
+secrets/
 **/service-account*.json
+**/*service-account*.json
 **/*credentials*.json

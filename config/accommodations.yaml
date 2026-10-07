@@ -1,22 +1,26 @@
 # Working accommodation catalog for MVP.
-# IDs and photo paths are project working names — owner must confirm commercial names.
-# sheet_unit_id is null until Google Sheets mapping is known.
+# sheet_unit_id / sheet_unit_ids = exact labels from prod Лист1 (B / A+B).
 #
 # Sources: docs/source/photo-mapping.md, docs/source/pricing-services-summary.md
 
 accommodations:
   - id: vip_plus_house_reserve
     name: "VIP+ (резервная, домик)"
+    sheet_unit_id: "Домик педбанник"
+    sheet_unit_ids:
+      - "Домик педбанник"
+      - "Домик 2 этаж"
     tariff_kind: vip_plus
     allowed_species: [dog, cat, rabbit, rat, hamster, bird, guinea_pig]
     features: [indoor, private, vip]
     priority_tags: [vip, unvaccinated_cats, stressed_cats]
     photo_paths:
       - assets/rooms/16-house-reserve-vip-plus.jpg
-    notes: "Резервная VIP+ в домике"
+    notes: "Резервная VIP+ в домике (педбанник / 2 этаж)"
 
   - id: seasonal_vip_under_stairs
     name: "Сезонная VIP (под лестницей)"
+    sheet_unit_id: "Домик под лестницей"
     tariff_kind: vip  # ordinary VIP — price row missing in PDF; do not auto-quote yet
     allowed_species: [dog, cat]
     features: [indoor, seasonal, pass-through]
@@ -28,6 +32,7 @@ accommodations:
 
   - id: comfort_plus
     name: "Комфорт+"
+    sheet_unit_id: "Комфорт+"
     tariff_kind: comfort_plus
     allowed_species: [dog, cat]
     features: [indoor, furniture]
@@ -36,6 +41,11 @@ accommodations:
 
   - id: comfort
     name: "Комфорт"
+    sheet_unit_id: "Комната Комфорт 1"
+    sheet_unit_ids:
+      - "Комната Комфорт 1"
+      - "Комната Комфорт 2"
+      - "Комната Комфорт 3"
     tariff_kind: comfort
     allowed_species: [dog, cat]
     features: [indoor, furniture]
@@ -48,6 +58,7 @@ accommodations:
 
   - id: premium_xxl
     name: "Премиум (усиленная клетка XXL)"
+    sheet_unit_id: "Вольер Премиум (Усиленная клетка XXL)"
     tariff_kind: premium
     allowed_species: [dog]
     weight_min_kg: 10
@@ -57,18 +68,28 @@ accommodations:
 
   - id: standard_l
     name: "Стандарт L"
+    sheet_unit_id: "Вольер стандарт L (Клетка) 1"
+    sheet_unit_ids:
+      - "Вольер стандарт L (Клетка) 1"
+      - "Вольер стандарт L (Клетка) 2"
     tariff_kind: standard_l
     allowed_species: [dog, cat]
     features: [enclosure]
 
   - id: standard_m
     name: "Стандарт M"
+    sheet_unit_id: "Стандартный вольер M (Клетка) 1"
+    sheet_unit_ids:
+      - "Стандартный вольер M (Клетка) 1"
+      - "Стандартный вольер M (Клетка) 2"
+      - "Стандартный вольер M (Клетка) 3"
     tariff_kind: standard_m
     allowed_species: [dog, cat]
     features: [enclosure]
 
   - id: optimal_s
     name: "Оптимальный S"
+    sheet_unit_id: "Вольер S (Клетка)"
     tariff_kind: optimal_s
     allowed_species: [dog, cat]
     weight_max_kg: 10
@@ -76,12 +97,18 @@ accommodations:
 
   - id: economy
     name: "Эконом"
+    sheet_unit_id: "Комната эконом (Бокс для кошек) 1"
     tariff_kind: economy
     allowed_species: [cat]
     features: [enclosure]
 
   - id: outdoor_comfort
     name: "Уличный комфорт"
+    sheet_unit_id: "Уличный Вольер Комфорт для собак 1"
+    sheet_unit_ids:
+      - "Уличный Вольер Комфорт для собак 1"
+      - "Уличный Вольер Комфорт для собак 2"
+      - "Уличный Вольер Комфорт для собак 3"
     tariff_kind: outdoor_comfort
     allowed_species: [dog]
     weight_min_kg: 10
@@ -91,6 +118,7 @@ accommodations:
 
   - id: home_shared
     name: "Домашнее размещение"
+    sheet_unit_id: "Домашнее размещение (Общее пространство для животных)"
     tariff_kind: home
     allowed_species: [dog, cat]
     weight_max_kg: 10
@@ -98,30 +126,33 @@ accommodations:
 
   - id: first_floor_workshop
     name: "Мастерская 1 этажа"
+    sheet_unit_id: "1 этаж мастерская"
     tariff_kind: comfort  # priced as comfort-class until owner maps exact tariff
     allowed_species: [dog, cat]
-    features: [indoor, ground_floor, workshop]
-    priority_tags: [elderly, incontinence]
+    features: [indoor, ground_floor, workshop, private, vip]
+    priority_tags: [elderly, incontinence, vip]
     photo_paths:
       - assets/rooms/01-first-floor-workshop.jpg
-    notes: "Приоритет пожилым и при проблемах мочеиспускания"
+    notes: "Приоритет пожилым и при проблемах мочеиспускания; в таблице под ВИП+"
 
   - id: balcony
     name: "Балкон"
+    sheet_unit_id: "2 этаж балкон"
     tariff_kind: comfort
     allowed_species: [dog, cat]
-    features: [indoor, balcony]
-    priority_tags: [treatment, disability]
+    features: [indoor, balcony, private, vip]
+    priority_tags: [treatment, disability, vip]
     photo_paths:
       - assets/rooms/05-balcony.jpg
-    notes: "Приоритет при лечении/инвалидности"
+    notes: "Приоритет при лечении/инвалидности; в таблице под ВИП+"
 
   - id: house_kitchen
     name: "Домик кухня"
+    sheet_unit_id: "Домик Кухня"
     tariff_kind: home
     allowed_species: [dog, cat]
-    features: [indoor, house]
-    priority_tags: [loud_barking, separate_house]
+    features: [indoor, house, private]
+    priority_tags: [loud_barking, separate_house, vip]
     photo_paths:
       - assets/rooms/09-house-kitchen-1.jpg
       - assets/rooms/10-house-kitchen-2.jpg
@@ -129,25 +160,42 @@ accommodations:
 
   - id: second_floor_formulas
     name: "2 этаж, комната с формулами"
+    sheet_unit_id: "2 этаж комната с формулами"
     tariff_kind: comfort
     allowed_species: [dog, cat]
-    features: [indoor]
+    features: [indoor, private, vip]
+    priority_tags: [vip]
     photo_paths:
       - assets/rooms/02-second-floor-formulas-room.jpg
 
+  - id: second_floor_a_plus_a
+    name: "2 этаж, комната А+А"
+    sheet_unit_id: "2 этаж комната А+А"
+    tariff_kind: vip_plus
+    allowed_species: [dog, cat]
+    features: [indoor, private, vip]
+    priority_tags: [vip]
+    photo_paths:
+      - assets/rooms/04-unknown-a-plus-a.jpg
+    notes: "Отдельная ВИП+ комната из календаря"
+
   - id: second_floor_hall
     name: "2 этаж, зал"
+    sheet_unit_id: "2 этаж комната-зал"
     tariff_kind: comfort
     allowed_species: [dog, cat]
-    features: [indoor, hall]
+    features: [indoor, hall, private, vip]
+    priority_tags: [vip]
     photo_paths:
       - assets/rooms/03-second-floor-hall.jpg
 
   - id: third_floor_workshop
     name: "Мастерская 3 этажа"
+    sheet_unit_id: "3 этаж мастерская"
     tariff_kind: comfort
     allowed_species: [dog, cat]
-    features: [indoor, workshop]
+    features: [indoor, workshop, private, vip]
+    priority_tags: [vip]
     photo_paths:
       - assets/rooms/06-third-floor-workshop.jpg
 

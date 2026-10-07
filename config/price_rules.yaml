@@ -15,7 +15,7 @@ price_rules:
     percent: 5
     priority: 10
     stackable: false
-    active: true
+    active: false  # placeholder code — enable only after owner confirms real promo code
     description: "Временная акция 5% на проживание, однократно, не суммируется (до 2026-11-01)"
 
   # Holidays / early booking — placeholders, inactive until owner provides numbers

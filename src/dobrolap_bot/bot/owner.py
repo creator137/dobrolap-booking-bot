@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from dobrolap_bot.bot.keyboards import client_reply_kb, owner_actions_kb, owner_paid_kb
+from dobrolap_bot.bot.keyboards import client_reply_kb, owner_actions_kb
 from dobrolap_bot.bot.states import BookingForm, OwnerForm
 from dobrolap_bot.config.loader import Catalog
 from dobrolap_bot.services.booking import BookingService, InvalidTransitionError
@@ -51,19 +51,30 @@ async def owner_approve(
     try:
         booking = await booking_service.approve(booking_id)
     except ValueError as exc:
-        await callback.message.answer(f"Не могу подтвердить: {exc}")
+        msg = str(exc)
+        if "unit_occupied" in msg:
+            await callback.message.answer(
+                "Место уже занято в календаре (возможно, вручную). "
+                "Предложите другой вариант или отклоните заявку."
+            )
+        else:
+            await callback.message.answer(f"Не могу подтвердить: {exc}")
         await callback.answer()
         return
     except InvalidTransitionError as exc:
         await callback.message.answer(f"Неверный статус: {exc}")
         await callback.answer()
         return
+    except Exception as exc:
+        await callback.message.answer(f"Календарь недоступен: {exc}")
+        await callback.answer()
+        return
 
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        f"Заявка {booking_id} подтверждена, ждём оплату.\n"
+        f"Заявка {booking_id} подтверждена, ждём оплату и чек.\n"
+        "Кнопка «Оплата получена» появится после того, как клиент пришлёт чек.\n\n"
         + format_owner_summary(booking, catalog),
-        reply_markup=owner_paid_kb(booking_id),
     )
 
     client_id = booking.customer_telegram_id
@@ -79,7 +90,7 @@ async def owner_approve(
             "Оплатите залог по инструкции ниже и пришлите чек (фото или PDF):\n\n"
             f"{pay_text}",
         )
-        # Put client into waiting_receipt state
+        # Best-effort FSM hint; receipt also accepted via SQLite WAITING_PAYMENT lookup.
         key = StorageKey(
             bot_id=callback.bot.id,
             chat_id=client_id,
@@ -242,7 +253,12 @@ async def owner_paid(
     try:
         booking = await booking_service.confirm_payment(booking_id)
     except ValueError as exc:
-        await callback.message.answer(f"Не могу зафиксировать: {exc}")
+        if str(exc) == "receipt_required":
+            await callback.message.answer(
+                "Сначала дождитесь чека от клиента — кнопка сработает после загрузки чека."
+            )
+        else:
+            await callback.message.answer(f"Не могу зафиксировать: {exc}")
         await callback.answer()
         return
     except InvalidTransitionError as exc:

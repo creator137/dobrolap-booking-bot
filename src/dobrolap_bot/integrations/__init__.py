@@ -5,6 +5,8 @@ from dobrolap_bot.integrations.google_sheets import (
     InMemorySheetsGateway,
     SheetBooking,
     SheetsGateway,
+    SheetsUnavailableError,
+    UnavailableSheetsGateway,
     dates_overlap,
 )
 from dobrolap_bot.integrations.llm import DisabledLlmAdapter
@@ -16,6 +18,8 @@ __all__ = [
     "InMemorySheetsGateway",
     "SheetBooking",
     "SheetsGateway",
+    "SheetsUnavailableError",
+    "UnavailableSheetsGateway",
     "build_sheets_gateway",
     "dates_overlap",
 ]

@@ -103,3 +103,38 @@ def test_multi_pet_flags_manual(placement):
     result = placement.suggest(pets)
     assert "multi_pet_group" in result.owner_flags
     assert result.requires_manual_matching
+
+
+def test_aggressive_dog_only_private_or_vip(placement):
+    pet = PetProfile(
+        kind=PetKind.DOG,
+        name="Злой",
+        weight_kg=12,
+        vaccinated=True,
+        parasite_treated=True,
+        behavior=BehaviorFlags(aggression=True),
+    )
+    result = placement.suggest([pet])
+    assert result.candidates
+    for c in result.candidates:
+        acc = c.accommodation
+        assert (
+            acc.tariff_kind in {"vip", "vip_plus"}
+            or "private" in acc.features
+            or "house" in acc.features
+            or "separate_house" in acc.priority_tags
+            or "vip" in acc.features
+        )
+
+
+def test_unvaccinated_dog_only_vip(placement):
+    pet = PetProfile(
+        kind=PetKind.DOG,
+        name="Безпрививки",
+        weight_kg=8,
+        vaccinated=False,
+        parasite_treated=True,
+    )
+    result = placement.suggest([pet])
+    assert result.candidates
+    assert all(c.accommodation.tariff_kind in {"vip", "vip_plus"} for c in result.candidates)

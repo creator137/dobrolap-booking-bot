@@ -38,11 +38,16 @@ async def run_bot() -> None:
 
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher(storage=MemoryStorage())
+    assets_dir = settings.assets_dir
+    if not assets_dir.is_absolute():
+        assets_dir = Path.cwd() / assets_dir
+
     dp["catalog"] = catalog
     dp["sheets"] = sheets
     dp["owner_chat_id"] = settings.owner_chat_id
     dp["payment_instructions"] = settings.payment_instructions
     dp["booking_service"] = booking_service
+    dp["assets_dir"] = assets_dir
     dp.include_router(owner_router)
     dp.include_router(client_router)
 

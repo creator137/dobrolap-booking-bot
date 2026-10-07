@@ -88,15 +88,38 @@ async def test_approve_blocked_if_occupied(booking_service):
         placement_flags=[],
         manual_matching=False,
     )
-    booking_service.sheets.upsert_booking(
-        booking_id="other",
-        unit_id="comfort",
-        date_from=date(2026, 12, 2),
-        date_to=date(2026, 12, 6),
-        status="CONFIRMED",
-    )
+    # Fill the whole comfort pool (Комфорт 1/2/3) — one slot busy is not enough.
+    for i, label in enumerate(booking_service.sheet_labels("comfort")):
+        booking_service.sheets.upsert_booking(
+            booking_id=f"other{i}",
+            unit_id=label,
+            date_from=date(2026, 12, 2),
+            date_to=date(2026, 12, 6),
+            status="CONFIRMED",
+        )
     with pytest.raises(ValueError, match="unit_occupied"):
         await booking_service.approve(booking.id)
+
+
+@pytest.mark.asyncio
+async def test_confirm_requires_receipt(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=555,
+        customer_name="D",
+        username=None,
+        consent_at=None,
+        date_from=date(2027, 1, 1),
+        date_to=date(2027, 1, 3),
+        pets=[_pet()],
+        unit_id="comfort",
+        feeding=FeedingOption.OWNER_FOOD,
+        service_ids=[],
+        placement_flags=[],
+        manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+    with pytest.raises(ValueError, match="receipt_required"):
+        await booking_service.confirm_payment(booking.id)
 
 
 @pytest.mark.asyncio

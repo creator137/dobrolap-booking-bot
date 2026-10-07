@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InputMediaPhoto,
+    Message,
+)
 
-from dobrolap_bot.bot.helpers import FEED_MAP, KIND_MAP, parse_dates, parse_yes
+from dobrolap_bot.bot.helpers import FEED_MAP, KIND_MAP, is_young, parse_dates, parse_yes
 from dobrolap_bot.bot.keyboards import (
     add_pet_kb,
     consent_kb,
     feeding_kb,
     owner_actions_kb,
+    owner_paid_kb,
     pet_kind_kb,
     services_kb,
     submit_kb,
@@ -21,9 +28,9 @@ from dobrolap_bot.bot.keyboards import (
 )
 from dobrolap_bot.bot.states import BookingForm
 from dobrolap_bot.config.loader import Catalog
-from dobrolap_bot.domain.enums import PetKind
+from dobrolap_bot.domain.enums import BookingStatus, FeedingOption, PetKind
 from dobrolap_bot.domain.models import BehaviorFlags, PetProfile
-from dobrolap_bot.integrations.google_sheets import SheetsGateway
+from dobrolap_bot.integrations.google_sheets import SheetsGateway, SheetsUnavailableError
 from dobrolap_bot.services.booking import BookingService
 from dobrolap_bot.services.placement import PlacementService
 from dobrolap_bot.services.pricing import PricingService
@@ -48,6 +55,24 @@ def _popular_services(catalog: Catalog) -> list:
         if s.active and s not in ordered:
             ordered.append(s)
     return ordered[:10]
+
+
+def _resolve_photo(path_str: str, assets_dir: Path) -> Path | None:
+    p = Path(path_str)
+    if not p.is_absolute():
+        # paths in yaml are like assets/rooms/...
+        cand = Path.cwd() / p
+        if cand.exists():
+            return cand
+        cand = assets_dir / p.name
+        if cand.exists():
+            return cand
+        # strip leading assets/
+        if path_str.startswith("assets/"):
+            cand = Path.cwd() / path_str
+            if cand.exists():
+                return cand
+    return p if p.exists() else None
 
 
 @router.message(CommandStart())
@@ -75,8 +100,6 @@ async def cmd_status(
     booking_service: BookingService,
     catalog: Catalog,
 ) -> None:
-    from dobrolap_bot.domain.enums import BookingStatus
-
     booking = await booking_service.repo.find_latest_by_telegram(
         message.from_user.id,
         statuses=[
@@ -98,9 +121,6 @@ async def cmd_cancel_booking(
     booking_service: BookingService,
     owner_chat_id: int | None,
 ) -> None:
-    """Client requests cancellation — owner decides money policy manually."""
-    from dobrolap_bot.domain.enums import BookingStatus
-
     booking = await booking_service.repo.find_latest_by_telegram(
         message.from_user.id,
         statuses=[
@@ -131,8 +151,7 @@ async def cmd_cancel_booking(
     if owner_chat_id and message.bot:
         await message.bot.send_message(
             owner_chat_id,
-            f"⚠️ Клиент просит отменить заявку {booking.id} (статус {booking.status.value}).\n"
-            "Отклоните/отмените вручную кнопкой или ответьте клиенту.",
+            f"⚠️ Клиент просит отменить заявку {booking.id} (статус {booking.status.value}).",
             reply_markup=owner_actions_kb(booking.id),
         )
 
@@ -191,6 +210,29 @@ async def set_pet_name(message: Message, state: FSMContext) -> None:
         await message.answer("Введите кличку.")
         return
     await state.update_data(draft_name=name)
+    await state.set_state(BookingForm.pet_breed)
+    await message.answer("Порода? Если неизвестна — напишите «нет» или «метьс».")
+
+
+@router.message(BookingForm.pet_breed)
+async def set_pet_breed(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    breed = None if text.lower() in {"нет", "-", "метьс", "метис", "не знаю"} else text
+    await state.update_data(draft_breed=breed)
+    await state.set_state(BookingForm.pet_age)
+    await message.answer("Возраст в месяцах (число)? Например 18. Для щенка/котёнка важно.")
+
+
+@router.message(BookingForm.pet_age)
+async def set_pet_age(message: Message, state: FSMContext) -> None:
+    try:
+        age = int((message.text or "").strip().replace(",", ".").split(".")[0])
+        if age < 0 or age > 400:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введите возраст целым числом месяцев, например 8")
+        return
+    await state.update_data(draft_age_months=age)
     data = await state.get_data()
     if data.get("draft_kind") == PetKind.DOG.value:
         await state.set_state(BookingForm.pet_weight)
@@ -259,6 +301,8 @@ async def set_behavior(message: Message, state: FSMContext) -> None:
             flags.chews_furniture = True
         if "стар" in text or "пожил" in text:
             flags.elderly = True
+        if "подвиж" in text or "хромот" in text or "не ходит" in text:
+            flags.mobility_limited = True
     await state.update_data(draft_behavior=flags.model_dump(), draft_behavior_raw=raw)
     await state.set_state(BookingForm.pet_health)
     await message.answer("Особенности здоровья / лечение / инвалидность? Или «нет».")
@@ -278,6 +322,8 @@ async def set_health(message: Message, state: FSMContext) -> None:
             flags.needs_treatment = True
         if "моч" in low:
             flags.incontinence = True
+        if "подвиж" in low or "хромот" in low or "не ходит" in low:
+            flags.mobility_limited = True
     await state.update_data(draft_health=health, draft_behavior=flags.model_dump())
     await state.set_state(BookingForm.pet_passport)
     await message.answer(
@@ -303,10 +349,15 @@ async def passport_done(message: Message, state: FSMContext) -> None:
         return
 
     data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    age_months = data.get("draft_age_months")
     pet = PetProfile(
-        kind=PetKind(data["draft_kind"]),
+        kind=kind,
         name=data["draft_name"],
+        breed=data.get("draft_breed"),
+        age_months=age_months,
         weight_kg=data.get("draft_weight"),
+        is_puppy_or_kitten=is_young(kind, age_months),
         vaccinated=data.get("draft_vaccinated"),
         parasite_treated=data.get("draft_parasite"),
         behavior=BehaviorFlags.model_validate(data.get("draft_behavior") or {}),
@@ -319,6 +370,8 @@ async def passport_done(message: Message, state: FSMContext) -> None:
         pets=pets,
         draft_kind=None,
         draft_name=None,
+        draft_breed=None,
+        draft_age_months=None,
         draft_weight=None,
         draft_vaccinated=None,
         draft_parasite=None,
@@ -328,8 +381,9 @@ async def passport_done(message: Message, state: FSMContext) -> None:
         draft_passport_ids=[],
     )
     await state.set_state(BookingForm.add_another_pet)
+    young = " (щенок/котёнок)" if pet.is_puppy_or_kitten else ""
     await message.answer(
-        f"Питомец «{pet.name}» добавлен. Всего: {len(pets)}.",
+        f"Питомец «{pet.name}»{young} добавлен. Всего: {len(pets)}.",
         reply_markup=add_pet_kb(),
     )
 
@@ -340,6 +394,8 @@ async def add_another(
     state: FSMContext,
     catalog: Catalog,
     sheets: SheetsGateway,
+    booking_service: BookingService,
+    assets_dir: Path,
 ) -> None:
     text = (message.text or "").strip().lower()
     if "добавить" in text:
@@ -347,7 +403,7 @@ async def add_another(
         await message.answer("Кто следующий питомец?", reply_markup=pet_kind_kb())
         return
     if "подбор" in text or "далее" in text:
-        await _run_placement(message, state, catalog, sheets)
+        await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
         return
     await message.answer("Выберите кнопку.", reply_markup=add_pet_kb())
 
@@ -357,12 +413,29 @@ async def _run_placement(
     state: FSMContext,
     catalog: Catalog,
     sheets: SheetsGateway,
+    booking_service: BookingService,
+    assets_dir: Path,
 ) -> None:
     data = await state.get_data()
     pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
     date_from = date.fromisoformat(data["date_from"])
     date_to = date.fromisoformat(data["date_to"])
-    occupied = sheets.occupied_unit_ids(date_from, date_to)
+    nights = (date_to - date_from).days
+
+    try:
+        occupied = booking_service.occupied_catalog_ids(date_from, date_to)
+    except SheetsUnavailableError:
+        await state.update_data(unit_id=None, manual_matching=True, placement_flags=["sheets_unavailable"])
+        await state.set_state(BookingForm.feeding)
+        await message.answer(
+            "Календарь занятости сейчас недоступен — не могу показать свободные места.\n"
+            "Заявку отправлю владельцу на ручной подбор.\n\nКак будем кормить?",
+            reply_markup=feeding_kb(),
+        )
+        if message.bot:
+            # owner notified later on submit; flag is enough
+            pass
+        return
 
     result = PlacementService(catalog).suggest(pets, occupied_unit_ids=occupied)
     await state.update_data(
@@ -381,18 +454,58 @@ async def _run_placement(
         )
         return
 
-    choices = []
-    lines = ["Подобрал варианты (предварительно):\n"]
+    pricing = PricingService(catalog)
+    choices: list[tuple[str, str]] = []
+    await message.answer("Подобрал свободные варианты:")
+
     for i, cand in enumerate(result.candidates, 1):
         acc = cand.accommodation
-        choices.append((acc.id, f"{i}. {acc.name}"))
-        warn = ", ".join(cand.warnings + cand.reasons[:2])
-        lines.append(f"{i}. {acc.name}" + (f" — {warn}" if warn else ""))
+        quote = pricing.quote(
+            pets=pets,
+            unit=acc,
+            date_from=date_from,
+            date_to=date_to,
+            feeding=FeedingOption.OWNER_FOOD,
+        )
+        day_hint = quote.total_rub // nights if nights else quote.total_rub
+        caption = (
+            f"{i}. {acc.name}\n"
+            f"≈ {day_hint} ₽/сут., предварительно за {nights} сут.: {quote.total_rub} ₽\n"
+            f"Залог: {quote.deposit_rub} ₽"
+        )
+        if cand.reasons:
+            caption += "\n" + ", ".join(cand.reasons[:2])
+        if quote.provisional or cand.requires_owner_review:
+            caption += "\n⚠️ требует подтверждения владельцем"
+
+        choices.append((acc.id, f"{i}. {acc.name} — {quote.total_rub} ₽"))
+
+        photos = []
+        for path_str in acc.photo_paths[:5]:
+            resolved = _resolve_photo(path_str, assets_dir)
+            if resolved:
+                photos.append(resolved)
+        if photos:
+            media = []
+            for idx, photo_path in enumerate(photos):
+                media.append(
+                    InputMediaPhoto(
+                        media=FSInputFile(photo_path),
+                        caption=caption if idx == 0 else None,
+                    )
+                )
+            try:
+                await message.answer_media_group(media)
+            except Exception:
+                await message.answer(caption)
+        else:
+            await message.answer(caption)
+
     if result.requires_manual_matching:
-        lines.append("\n⚠️ Заявка потребует ручного подтверждения владельцем.")
+        await message.answer("⚠️ Заявка всё равно уйдёт на ручное подтверждение.")
 
     await state.set_state(BookingForm.choose_unit)
-    await message.answer("\n".join(lines), reply_markup=unit_choice_kb(choices))
+    await message.answer("Выберите вариант:", reply_markup=unit_choice_kb(choices))
 
 
 @router.callback_query(BookingForm.choose_unit, F.data.startswith("unit:"))
@@ -429,14 +542,17 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
     data = await state.get_data()
     selected = set(data.get("service_ids") or [])
 
-    if action == "none":
-        selected = set()
-        await state.update_data(service_ids=[])
-        await _show_summary(callback, state, catalog)
-        await callback.answer()
-        return
-    if action == "done":
-        await _show_summary(callback, state, catalog)
+    if action in {"none", "done"}:
+        if action == "none":
+            await state.update_data(service_ids=[])
+        await state.set_state(BookingForm.promo)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer(
+            "Есть промокод? Пришлите его или напишите «нет»."
+        )
         await callback.answer()
         return
 
@@ -450,14 +566,22 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
     await callback.answer()
 
 
-async def _show_summary(callback: CallbackQuery, state: FSMContext, catalog: Catalog) -> None:
+@router.message(BookingForm.promo)
+async def set_promo(message: Message, state: FSMContext, catalog: Catalog) -> None:
+    text = (message.text or "").strip()
+    promo = None if text.lower() in {"нет", "-", "нет промокода"} else text
+    await state.update_data(promo_code=promo)
+    # Build a fake callback-like summary via helper
+    await _show_summary_message(message, state, catalog)
+
+
+async def _show_summary_message(message: Message, state: FSMContext, catalog: Catalog) -> None:
     data = await state.get_data()
     pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
-    from dobrolap_bot.domain.enums import FeedingOption
-
     feeding_opt = FeedingOption(data["feeding"]) if data.get("feeding") else None
     service_ids = list(data.get("service_ids") or [])
     unit_id = data.get("unit_id")
+    promo = data.get("promo_code")
 
     lines = [
         "Проверьте заявку:",
@@ -466,13 +590,11 @@ async def _show_summary(callback: CallbackQuery, state: FSMContext, catalog: Cat
         f"Питание: {data.get('feeding')}",
     ]
     if service_ids:
-        names = []
-        for sid in service_ids:
-            svc = catalog.get_service(sid)
-            names.append(svc.name if svc else sid)
+        names = [catalog.get_service(sid).name if catalog.get_service(sid) else sid for sid in service_ids]
         lines.append("Услуги: " + ", ".join(names))
     else:
         lines.append("Услуги: нет")
+    lines.append(f"Промокод: {promo or '—'}")
 
     if unit_id:
         unit = catalog.get_accommodation(unit_id)
@@ -484,6 +606,7 @@ async def _show_summary(callback: CallbackQuery, state: FSMContext, catalog: Cat
                 date_to=date.fromisoformat(data["date_to"]),
                 feeding=feeding_opt,
                 service_ids=service_ids,
+                promo_code=promo,
             )
             await state.update_data(
                 price_total=quote.total_rub,
@@ -506,11 +629,7 @@ async def _show_summary(callback: CallbackQuery, state: FSMContext, catalog: Cat
         lines.append("Флаги: " + ", ".join(data.get("placement_flags") or ["manual"]))
 
     await state.set_state(BookingForm.confirm_submit)
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    await callback.message.answer("\n".join(lines), reply_markup=submit_kb())
+    await message.answer("\n".join(lines), reply_markup=submit_kb())
 
 
 @router.callback_query(BookingForm.confirm_submit, F.data == "submit:yes")
@@ -520,12 +639,9 @@ async def submit_yes(
     booking_service: BookingService,
     catalog: Catalog,
     owner_chat_id: int | None,
-    payment_instructions: str,
 ) -> None:
     data = await state.get_data()
     pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
-    from dobrolap_bot.domain.enums import FeedingOption
-
     feeding = FeedingOption(data["feeding"]) if data.get("feeding") else None
     consent_raw = data.get("consent_at")
     consent_at = datetime.fromisoformat(consent_raw) if consent_raw else None
@@ -544,7 +660,15 @@ async def submit_yes(
             service_ids=list(data.get("service_ids") or []),
             placement_flags=list(data.get("placement_flags") or []),
             manual_matching=bool(data.get("manual_matching") or data.get("requires_manual")),
+            promo_code=data.get("promo_code"),
         )
+    except SheetsUnavailableError:
+        await callback.message.answer(
+            "Календарь недоступен — заявку сейчас сохранить с проверкой занятости нельзя. "
+            "Попробуйте позже или напишите владельцу напрямую."
+        )
+        await callback.answer()
+        return
     except ValueError as exc:
         if str(exc) == "selected_unit_occupied":
             await callback.message.answer(
@@ -561,7 +685,6 @@ async def submit_yes(
             summary,
             reply_markup=owner_actions_kb(booking.id),
         )
-        # Forward passport photos to owner if any
         for pet in pets:
             for file_id in pet.passport_file_ids:
                 try:
@@ -579,18 +702,15 @@ async def submit_yes(
         )
     else:
         await callback.message.answer(
-            f"Заявку {booking.id} сохранил, но OWNER_CHAT_ID не задан — "
-            "владельцу не отправил. Проверьте .env."
+            f"Заявку {booking.id} сохранил, но OWNER_CHAT_ID не задан."
         )
 
     await state.clear()
-    await state.update_data(active_booking_id=booking.id)
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
     await callback.answer()
-    _ = payment_instructions  # injected for DI consistency; used on approve
 
 
 @router.callback_query(BookingForm.confirm_submit, F.data == "submit:no")
@@ -601,64 +721,112 @@ async def submit_no(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@router.message(BookingForm.waiting_receipt, F.photo)
-async def receipt_photo(
+async def _accept_receipt(
     message: Message,
-    state: FSMContext,
     booking_service: BookingService,
     owner_chat_id: int | None,
-) -> None:
-    data = await state.get_data()
-    booking_id = data.get("booking_id")
-    if not booking_id:
-        await message.answer("Не вижу активной заявки на оплату. /status")
-        return
-    file_id = message.photo[-1].file_id
+    file_id: str,
+    *,
+    as_document: bool = False,
+) -> bool:
+    """Attach receipt for WAITING_PAYMENT booking (FSM or SQLite recovery)."""
+    booking = await booking_service.repo.find_latest_by_telegram(
+        message.from_user.id,
+        statuses=[BookingStatus.WAITING_PAYMENT],
+    )
+    if not booking:
+        return False
     try:
-        booking = await booking_service.attach_receipt(booking_id, file_id)
+        booking = await booking_service.attach_receipt(booking.id, file_id)
     except Exception as exc:
         await message.answer(f"Не принял чек: {exc}")
-        return
+        return True
 
     await message.answer(
         "Чек получил и передал владельцу на проверку. "
         "После подтверждения оплаты бронь будет зафиксирована."
     )
     if owner_chat_id and message.bot:
-        from dobrolap_bot.bot.keyboards import owner_paid_kb
+        if as_document:
+            await message.bot.send_document(
+                owner_chat_id,
+                file_id,
+                caption=f"Чек по заявке {booking.id}",
+                reply_markup=owner_paid_kb(booking.id),
+            )
+        else:
+            await message.bot.send_photo(
+                owner_chat_id,
+                file_id,
+                caption=f"Чек по заявке {booking.id}",
+                reply_markup=owner_paid_kb(booking.id),
+            )
+    return True
 
-        await message.bot.send_photo(
-            owner_chat_id,
-            file_id,
-            caption=f"Чек по заявке {booking.id}",
-            reply_markup=owner_paid_kb(booking.id),
-        )
+
+@router.message(BookingForm.waiting_receipt, F.photo)
+async def receipt_photo_fsm(
+    message: Message,
+    booking_service: BookingService,
+    owner_chat_id: int | None,
+) -> None:
+    await _accept_receipt(
+        message, booking_service, owner_chat_id, message.photo[-1].file_id
+    )
 
 
 @router.message(BookingForm.waiting_receipt, F.document)
-async def receipt_document(
+async def receipt_document_fsm(
+    message: Message,
+    booking_service: BookingService,
+    owner_chat_id: int | None,
+) -> None:
+    if not message.document:
+        return
+    await _accept_receipt(
+        message,
+        booking_service,
+        owner_chat_id,
+        message.document.file_id,
+        as_document=True,
+    )
+
+
+# Recovery after bot restart: accept receipt by SQLite status, not only FSM.
+@router.message(F.photo)
+async def receipt_photo_recovery(
     message: Message,
     state: FSMContext,
     booking_service: BookingService,
     owner_chat_id: int | None,
 ) -> None:
-    data = await state.get_data()
-    booking_id = data.get("booking_id")
-    if not booking_id or not message.document:
-        await message.answer("Пришлите фото или PDF чека.")
+    current = await state.get_state()
+    if current is not None:
         return
-    file_id = message.document.file_id
-    booking = await booking_service.attach_receipt(booking_id, file_id)
-    await message.answer("Чек (документ) получил и передал владельцу.")
-    if owner_chat_id and message.bot:
-        from dobrolap_bot.bot.keyboards import owner_paid_kb
+    handled = await _accept_receipt(
+        message, booking_service, owner_chat_id, message.photo[-1].file_id
+    )
+    if not handled:
+        return
 
-        await message.bot.send_document(
-            owner_chat_id,
-            file_id,
-            caption=f"Чек по заявке {booking.id}",
-            reply_markup=owner_paid_kb(booking.id),
-        )
+
+@router.message(F.document)
+async def receipt_document_recovery(
+    message: Message,
+    state: FSMContext,
+    booking_service: BookingService,
+    owner_chat_id: int | None,
+) -> None:
+    current = await state.get_state()
+    if current is not None or not message.document:
+        return
+    await _accept_receipt(
+        message,
+        booking_service,
+        owner_chat_id,
+        message.document.file_id,
+        as_document=True,
+    )
 
 
 @router.callback_query(F.data.startswith("cli:reply:"))

@@ -8,6 +8,12 @@ from dobrolap_bot.domain.enums import FeedingOption, PetKind
 KIND_MAP = {
     "собака": PetKind.DOG,
     "кошка": PetKind.CAT,
+    "кролик": PetKind.RABBIT,
+    "крыса": PetKind.RAT,
+    "хомяк": PetKind.HAMSTER,
+    "птица": PetKind.BIRD,
+    "морская свинка": PetKind.GUINEA_PIG,
+    "свинка": PetKind.GUINEA_PIG,
     "другое": PetKind.OTHER,
 }
 
@@ -40,6 +46,17 @@ def parse_yes(text: str) -> bool | None:
     if t in {"нет", "no", "n", "-"}:
         return False
     return None
+
+
+def is_young(kind: PetKind, age_months: int | None) -> bool:
+    """Puppy < 12 months; kitten < 7 months (from price sheet)."""
+    if age_months is None:
+        return False
+    if kind == PetKind.DOG:
+        return age_months < 12
+    if kind == PetKind.CAT:
+        return age_months < 7
+    return False
 
 
 # Backwards-compatible aliases for tests

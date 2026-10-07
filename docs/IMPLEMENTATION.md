@@ -11,20 +11,21 @@
 | 2 | PlacementRules + PricingService + тесты | ✅ |
 | 3 | SQLite + переходы статусов | ✅ |
 | 4 | aiogram FSM клиента | ✅ |
-| 5 | Sheets через Apps Script Web App (+ stub/SA fallback) | ✅ |
+| 5 | Sheets: grid Лист1 + Apps Script LockService / SA | ✅ |
 | 6 | Оператор, реквизиты, чек, услуги, отмена | ✅ |
 | 7 | Optional LLM | stub готов, выключен |
 | 8 | Docker-образ | ✅ Dockerfile |
+| 9 | Review fixes: fail-closed, фото+цена, возраст/виды, dog hard-filters, промо, чек после рестарта | ✅ |
 
 Инструкция владельцу по таблице: [OWNER_SETUP.md](OWNER_SETUP.md).
 
 ## Полный поток MVP
 
-1. Клиент: `/start` → согласие → даты → анкета → паспорт → подбор → питание → услуги → отправка.
+1. Клиент: `/start` → согласие → даты → анкета (вид/порода/возраст) → паспорт → подбор (фото+цена) → питание → услуги → промокод → отправка.
 2. Владелец получает сводку + кнопки: подтвердить / вопрос / другой вариант / отклонить.
-3. После подтверждения клиенту уходят `PAYMENT_INSTRUCTIONS`, статус `WAITING_PAYMENT`.
-4. Клиент шлёт чек (фото/PDF) → владельцу кнопка «Оплата получена».
-5. `CONFIRMED` + upsert через Apps Script в лист `Bookings`.
+3. После подтверждения — атомарный `reserve` в grid-календарь Лист1 (Apps Script + LockService), клиенту уходят `PAYMENT_INSTRUCTIONS`, статус `WAITING_PAYMENT`.
+4. Клиент шлёт чек (фото/PDF; после рестарта бота — по статусу в SQLite) → владельцу кнопка «Оплата получена».
+5. `CONFIRMED` + обновление пометки в Лист1.
 
 Команды клиента: `/start`, `/cancel`, `/status`, `/cancel_booking`.
 

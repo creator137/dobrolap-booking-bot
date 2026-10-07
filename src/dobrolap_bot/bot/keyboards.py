@@ -22,7 +22,9 @@ def pet_kind_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Собака"), KeyboardButton(text="Кошка")],
-            [KeyboardButton(text="Другое")],
+            [KeyboardButton(text="Кролик"), KeyboardButton(text="Крыса")],
+            [KeyboardButton(text="Хомяк"), KeyboardButton(text="Птица")],
+            [KeyboardButton(text="Морская свинка"), KeyboardButton(text="Другое")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -64,14 +66,13 @@ def unit_choice_kb(unit_ids: list[tuple[str, str]]) -> InlineKeyboardMarkup:
 
 
 def services_kb(items: list[tuple[str, str, bool]]) -> InlineKeyboardMarkup:
-    """items: (service_id, title, selected)."""
     rows = []
     for sid, title, selected in items:
         mark = "✅ " if selected else ""
         rows.append(
             [InlineKeyboardButton(text=f"{mark}{title}"[:64], callback_data=f"svc:{sid}")]
         )
-    rows.append([InlineKeyboardButton(text="Готово → сводка", callback_data="svc:done")])
+    rows.append([InlineKeyboardButton(text="Готово → далее", callback_data="svc:done")])
     rows.append([InlineKeyboardButton(text="Без доп. услуг", callback_data="svc:none")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -102,6 +103,7 @@ def owner_actions_kb(booking_id: str) -> InlineKeyboardMarkup:
 
 
 def owner_paid_kb(booking_id: str) -> InlineKeyboardMarkup:
+    """Shown only after a receipt was received."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [

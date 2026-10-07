@@ -12,7 +12,6 @@ from dobrolap_bot.repositories.sqlite import BookingRecord, SqliteRepository
 from dobrolap_bot.services.placement import PlacementService
 from dobrolap_bot.services.pricing import PricingService
 
-# Allowed transitions for MVP.
 _ALLOWED: dict[BookingStatus, set[BookingStatus]] = {
     BookingStatus.DRAFT: {
         BookingStatus.WAITING_OWNER,
@@ -82,6 +81,62 @@ class BookingService:
         self.placement = PlacementService(catalog)
         self.pricing = PricingService(catalog)
 
+    def sheet_labels(self, unit_id: str) -> list[str]:
+        """Calendar row label(s) for a catalog unit (pool-aware)."""
+        acc = self.catalog.get_accommodation(unit_id)
+        if acc is None:
+            return [unit_id]
+        return acc.calendar_labels()
+
+    def sheet_label(self, unit_id: str) -> str:
+        """Primary calendar label (first pool slot)."""
+        labels = self.sheet_labels(unit_id)
+        return labels[0] if labels else unit_id
+
+    def resolve_free_sheet_label(
+        self,
+        unit_id: str,
+        date_from: date,
+        date_to: date,
+        *,
+        exclude_booking_id: str | None = None,
+    ) -> str:
+        """Pick first free calendar row for catalog unit; raise if pool full."""
+        occupied = {
+            x.strip().lower()
+            for x in self.sheets.occupied_unit_ids(
+                date_from, date_to, exclude_booking_id=exclude_booking_id
+            )
+        }
+        for label in self.sheet_labels(unit_id):
+            if label.strip().lower() not in occupied:
+                return label
+        raise ValueError("unit_occupied")
+
+    def occupied_catalog_ids(
+        self,
+        date_from: date,
+        date_to: date,
+        *,
+        exclude_booking_id: str | None = None,
+    ) -> set[str]:
+        """Catalog units with no free calendar slot in the range."""
+        occupied_labels = {
+            x.strip().lower()
+            for x in self.sheets.occupied_unit_ids(
+                date_from, date_to, exclude_booking_id=exclude_booking_id
+            )
+        }
+        out: set[str] = set()
+        for acc in self.catalog.accommodations:
+            labels = [x.strip().lower() for x in acc.calendar_labels()]
+            if not labels:
+                continue
+            # Pool: unit is unavailable only when every slot is busy.
+            if all(label in occupied_labels for label in labels):
+                out.add(acc.id)
+        return out
+
     async def submit_booking(
         self,
         *,
@@ -108,9 +163,8 @@ class BookingService:
 
         quote: PriceQuote | None = None
         unit = self.catalog.get_accommodation(unit_id) if unit_id else None
-        if unit is not None:
-            # Re-check occupancy before sending to owner
-            occupied = self.sheets.occupied_unit_ids(date_from, date_to)
+        if unit is not None and unit_id is not None:
+            occupied = self.occupied_catalog_ids(date_from, date_to)
             if unit_id in occupied:
                 raise ValueError("selected_unit_occupied")
             quote = self.pricing.quote(
@@ -194,35 +248,48 @@ class BookingService:
 
     async def approve(self, booking_id: str) -> BookingRecord:
         booking = await self._require(booking_id)
+        sheet_label: str | None = None
         if booking.unit_id:
-            occupied = self.sheets.occupied_unit_ids(
-                booking.date_from,
-                booking.date_to,
-                exclude_booking_id=booking.id,
-            )
-            if booking.unit_id in occupied:
-                raise ValueError("unit_occupied_on_approve")
+            try:
+                sheet_label = self.resolve_free_sheet_label(
+                    booking.unit_id,
+                    booking.date_from,
+                    booking.date_to,
+                    exclude_booking_id=booking.id,
+                )
+                self.sheets.reserve_booking(
+                    booking_id=booking.id,
+                    unit_id=sheet_label,
+                    date_from=booking.date_from,
+                    date_to=booking.date_to,
+                    status=BookingStatus.WAITING_PAYMENT.value,
+                )
+            except ValueError as exc:
+                if "unit_occupied" in str(exc):
+                    raise ValueError("unit_occupied_on_approve") from exc
+                raise
 
-        booking = await self._set_status(booking, BookingStatus.OWNER_APPROVED)
+        extra = {"sheet_label": sheet_label} if sheet_label else None
+        booking = await self._set_status(
+            booking, BookingStatus.OWNER_APPROVED, extra_payload=extra
+        )
         booking = await self._set_status(booking, BookingStatus.WAITING_PAYMENT)
-        if booking.unit_id:
-            self.sheets.upsert_booking(
-                booking_id=booking.id,
-                unit_id=booking.unit_id,
-                date_from=booking.date_from,
-                date_to=booking.date_to,
-                status=booking.status.value,
-            )
         return booking
 
     async def reject(self, booking_id: str, reason: str | None = None) -> BookingRecord:
         booking = await self._require(booking_id)
-        return await self._set_status(
+        booking = await self._set_status(
             booking,
             BookingStatus.OWNER_REJECTED,
             owner_note=reason,
             extra_payload={"reject_reason": reason},
         )
+        held = booking.payload.get("sheet_label")
+        self.sheets.release_booking(
+            booking_id=booking.id,
+            unit_id=held or (self.sheet_label(booking.unit_id) if booking.unit_id else None),
+        )
+        return booking
 
     async def cancel(self, booking_id: str, reason: str | None = None) -> BookingRecord:
         booking = await self._require(booking_id)
@@ -232,14 +299,11 @@ class BookingService:
             owner_note=reason,
             extra_payload={"cancel_reason": reason},
         )
-        if booking.unit_id:
-            self.sheets.upsert_booking(
-                booking_id=booking.id,
-                unit_id=booking.unit_id,
-                date_from=booking.date_from,
-                date_to=booking.date_to,
-                status=BookingStatus.CANCELLED.value,
-            )
+        held = booking.payload.get("sheet_label")
+        self.sheets.release_booking(
+            booking_id=booking.id,
+            unit_id=held or (self.sheet_label(booking.unit_id) if booking.unit_id else None),
+        )
         return booking
 
     async def add_owner_question(self, booking_id: str, text: str) -> BookingRecord:
@@ -265,7 +329,7 @@ class BookingService:
         unit = self.catalog.get_accommodation(unit_id)
         if unit is None:
             raise ValueError("unknown_unit")
-        occupied = self.sheets.occupied_unit_ids(
+        occupied = self.occupied_catalog_ids(
             booking.date_from,
             booking.date_to,
             exclude_booking_id=booking.id,
@@ -318,25 +382,24 @@ class BookingService:
 
     async def confirm_payment(self, booking_id: str) -> BookingRecord:
         booking = await self._require(booking_id)
+        receipts = list(booking.payload.get("receipt_file_ids") or [])
+        if not receipts:
+            raise ValueError("receipt_required")
         if booking.unit_id:
-            occupied = self.sheets.occupied_unit_ids(
+            label = booking.payload.get("sheet_label") or self.resolve_free_sheet_label(
+                booking.unit_id,
                 booking.date_from,
                 booking.date_to,
                 exclude_booking_id=booking.id,
             )
-            if booking.unit_id in occupied:
-                raise ValueError("unit_occupied_on_confirm")
-
-        booking = await self._set_status(booking, BookingStatus.CONFIRMED)
-        if booking.unit_id:
-            self.sheets.upsert_booking(
+            self.sheets.reserve_booking(
                 booking_id=booking.id,
-                unit_id=booking.unit_id,
+                unit_id=label,
                 date_from=booking.date_from,
                 date_to=booking.date_to,
                 status=BookingStatus.CONFIRMED.value,
             )
-        return booking
+        return await self._set_status(booking, BookingStatus.CONFIRMED)
 
     async def _require(self, booking_id: str) -> BookingRecord:
         booking = await self.repo.get_booking(booking_id)

@@ -68,7 +68,16 @@ class Accommodation(BaseModel):
     priority_tags: list[str] = Field(default_factory=list)
     photo_paths: list[str] = Field(default_factory=list)
     sheet_unit_id: str | None = None
+    # Multiple calendar rows for one catalog unit (e.g. Комфорт 1/2/3).
+    sheet_unit_ids: list[str] = Field(default_factory=list)
     active: bool = True
+
+    def calendar_labels(self) -> list[str]:
+        if self.sheet_unit_ids:
+            return [x.strip() for x in self.sheet_unit_ids if x and str(x).strip()]
+        if self.sheet_unit_id:
+            return [self.sheet_unit_id.strip()]
+        return [self.name.strip()]
     seasonal: bool = False
     notes: str | None = None
 
