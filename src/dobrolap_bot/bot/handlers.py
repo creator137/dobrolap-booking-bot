@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from aiogram.types import (
     FSInputFile,
     InputMediaPhoto,
     Message,
+    ReplyKeyboardRemove,
 )
 
 from dobrolap_bot.bot.calendar_kb import (
@@ -19,10 +21,20 @@ from dobrolap_bot.bot.calendar_kb import (
     parse_day,
     parse_nav,
 )
-from dobrolap_bot.bot.helpers import FEED_MAP, KIND_MAP, is_young, parse_dates, parse_yes
+from dobrolap_bot.bot.helpers import (
+    FEED_MAP,
+    KIND_MAP,
+    is_young,
+    normalize_phone,
+    parse_age_months,
+    parse_dates,
+    parse_yes,
+)
 from dobrolap_bot.bot.keyboards import (
     add_pet_kb,
+    behavior_kb,
     consent_kb,
+    contact_kb,
     feeding_kb,
     no_kb,
     owner_actions_kb,
@@ -35,6 +47,11 @@ from dobrolap_bot.bot.keyboards import (
     unit_choice_kb,
     yes_no_kb,
 )
+from dobrolap_bot.bot.presentation import (
+    format_draft_summary,
+    placement_reason_label,
+    status_label,
+)
 from dobrolap_bot.bot.states import BookingForm
 from dobrolap_bot.config.loader import Catalog
 from dobrolap_bot.domain.enums import BookingStatus, FeedingOption, PetKind
@@ -46,9 +63,10 @@ from dobrolap_bot.services.pricing import PricingService
 from dobrolap_bot.services.summary import format_client_status, format_owner_summary
 
 router = Router(name="client")
+logger = logging.getLogger(__name__)
 
 
-def _popular_services(catalog: Catalog) -> list:
+def _available_services(catalog: Catalog, pets: list[PetProfile]) -> list:
     preferred = [
         "nail_trim",
         "med_care",
@@ -58,10 +76,17 @@ def _popular_services(catalog: Catalog) -> list:
         "walk",
         "hygiene_complex_dog",
     ]
-    by_id = {s.id: s for s in catalog.services if s.active}
+    pet_kinds = {pet.kind for pet in pets}
+    by_id = {
+        service.id: service
+        for service in catalog.services
+        if service.active
+        and service.id != "natural_feeding"
+        and (not service.applies_to or bool(set(service.applies_to) & pet_kinds))
+    }
     ordered = [by_id[i] for i in preferred if i in by_id]
     for s in catalog.services:
-        if s.active and s not in ordered:
+        if s.id in by_id and s not in ordered:
             ordered.append(s)
     return ordered[:10]
 
@@ -144,7 +169,7 @@ async def cmd_cancel_booking(
         return
     if booking.status == BookingStatus.WAITING_OWNER:
         await booking_service.cancel(booking.id, "client_request")
-        await message.answer(f"Заявку {booking.id} отменил.")
+        await message.answer(f"Заявка №{booking.id} отменена.")
         if owner_chat_id and message.bot:
             await message.bot.send_message(
                 owner_chat_id,
@@ -153,14 +178,15 @@ async def cmd_cancel_booking(
         return
 
     await message.answer(
-        f"Запрос на отмену заявки {booking.id} отправил владельцу.\n"
+        f"Запрос на отмену заявки №{booking.id} отправлен владельцу.\n"
         "Политика возврата залога: более чем за 24 часа — полный возврат, "
         "за 24 часа и менее — 50%. Окончательное решение за владельцем."
     )
     if owner_chat_id and message.bot:
         await message.bot.send_message(
             owner_chat_id,
-            f"⚠️ Клиент просит отменить заявку {booking.id} (статус {booking.status.value}).",
+            f"⚠️ Клиент просит отменить заявку №{booking.id}.\n"
+            f"Текущий статус: {status_label(booking.status)}.",
             reply_markup=owner_cancel_kb(booking.id),
         )
 
@@ -190,19 +216,18 @@ async def _finish_dates(message: Message, state: FSMContext, date_from: date, da
 
 @router.callback_query(BookingForm.consent, F.data == "consent:yes")
 async def consent_yes(callback: CallbackQuery, state: FSMContext) -> None:
-    today = date.today()
     await state.update_data(
         consent_at=datetime.now(timezone.utc).isoformat(),
         pets=[],
         service_ids=[],
         cal_pick_from=None,
     )
-    await state.set_state(BookingForm.dates)
+    await state.set_state(BookingForm.contact)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        dates_prompt(),
-        reply_markup=_calendar_kb(year=today.year, month=today.month),
-        parse_mode="HTML",
+        "Оставьте номер телефона для связи по заявке.\n"
+        "Можно безопасно отправить свой номер кнопкой Telegram или ввести его вручную.",
+        reply_markup=contact_kb(),
     )
     await callback.answer()
 
@@ -213,6 +238,48 @@ async def consent_no(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("Без согласия продолжить нельзя. Если передумаете — /start.")
     await callback.answer()
+
+
+async def _start_dates(message: Message, state: FSMContext) -> None:
+    today = date.today()
+    await state.set_state(BookingForm.dates)
+    await message.answer(
+        dates_prompt(),
+        reply_markup=_calendar_kb(year=today.year, month=today.month),
+        parse_mode="HTML",
+    )
+
+
+@router.message(BookingForm.contact, F.contact)
+async def set_contact_from_telegram(message: Message, state: FSMContext) -> None:
+    if not message.contact or message.contact.user_id not in {None, message.from_user.id}:
+        await message.answer("Пожалуйста, отправьте свой номер или введите его вручную.")
+        return
+    phone = normalize_phone(message.contact.phone_number)
+    if not phone:
+        await message.answer("Не удалось распознать номер. Введите его вручную, например +7 900 123-45-67.")
+        return
+    await state.update_data(customer_contact=phone)
+    await message.answer(f"Телефон сохранён: {phone}", reply_markup=ReplyKeyboardRemove())
+    await _start_dates(message, state)
+
+
+@router.message(BookingForm.contact)
+async def set_contact_manually(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if text.lower() == "ввести номер вручную":
+        await message.answer(
+            "Введите номер телефона, например +7 900 123-45-67.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+    phone = normalize_phone(text)
+    if not phone:
+        await message.answer("Проверьте номер. Нужны 10–15 цифр, например +7 900 123-45-67.")
+        return
+    await state.update_data(customer_contact=phone)
+    await message.answer(f"Телефон сохранён: {phone}", reply_markup=ReplyKeyboardRemove())
+    await _start_dates(message, state)
 
 
 @router.callback_query(BookingForm.dates, F.data == "cal:noop")
@@ -340,10 +407,61 @@ async def set_pet_name(message: Message, state: FSMContext) -> None:
         await message.answer("Введите кличку.")
         return
     await state.update_data(draft_name=name)
+    data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    if kind not in {PetKind.DOG, PetKind.CAT}:
+        await _store_current_pet(message, state)
+        return
     await state.set_state(BookingForm.pet_breed)
     await message.answer(
-        "Порода? Если неизвестна — «Нет» или «метьс».",
+        "Какая порода? Если порода неизвестна или питомец — метис, нажмите «Нет».",
         reply_markup=no_kb(),
+    )
+
+
+async def _store_current_pet(
+    message: Message,
+    state: FSMContext,
+    *,
+    passport_ids: list[str] | None = None,
+) -> None:
+    data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    age_months = data.get("draft_age_months")
+    pet = PetProfile(
+        kind=kind,
+        name=data["draft_name"],
+        breed=data.get("draft_breed"),
+        age_months=age_months,
+        weight_kg=data.get("draft_weight"),
+        is_puppy_or_kitten=is_young(kind, age_months),
+        vaccinated=data.get("draft_vaccinated"),
+        parasite_treated=data.get("draft_parasite"),
+        behavior=BehaviorFlags.model_validate(data.get("draft_behavior") or {}),
+        health_notes=data.get("draft_health"),
+        passport_file_ids=list(passport_ids or []),
+    )
+    pets = list(data.get("pets") or [])
+    pets.append(pet.model_dump(mode="json"))
+    await state.update_data(
+        pets=pets,
+        draft_kind=None,
+        draft_name=None,
+        draft_breed=None,
+        draft_age_months=None,
+        draft_weight=None,
+        draft_vaccinated=None,
+        draft_parasite=None,
+        draft_behavior=None,
+        draft_behavior_raw=None,
+        draft_health=None,
+        draft_passport_ids=[],
+    )
+    await state.set_state(BookingForm.add_another_pet)
+    young = " (щенок/котёнок)" if pet.is_puppy_or_kitten else ""
+    await message.answer(
+        f"Питомец «{pet.name}»{young} добавлен. Всего питомцев: {len(pets)}.",
+        reply_markup=add_pet_kb(),
     )
 
 
@@ -353,17 +471,16 @@ async def set_pet_breed(message: Message, state: FSMContext) -> None:
     breed = None if text.lower() in {"нет", "-", "метьс", "метис", "не знаю"} else text
     await state.update_data(draft_breed=breed)
     await state.set_state(BookingForm.pet_age)
-    await message.answer("Возраст в месяцах (число)? Например 18. Для щенка/котёнка важно.")
+    await message.answer(
+        "Сколько питомцу лет и месяцев? Например: «2 года 3 месяца» или «8 месяцев»."
+    )
 
 
 @router.message(BookingForm.pet_age)
 async def set_pet_age(message: Message, state: FSMContext) -> None:
-    try:
-        age = int((message.text or "").strip().replace(",", ".").split(".")[0])
-        if age < 0 or age > 400:
-            raise ValueError
-    except ValueError:
-        await message.answer("Введите возраст целым числом месяцев, например 8")
+    age = parse_age_months(message.text or "")
+    if age is None:
+        await message.answer("Не удалось понять возраст. Напишите, например: «2 года» или «8 месяцев».")
         return
     await state.update_data(draft_age_months=age)
     data = await state.get_data()
@@ -409,39 +526,68 @@ async def set_parasite(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(draft_parasite=val)
     await state.set_state(BookingForm.pet_behavior)
+    data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    await state.update_data(draft_behavior_selected=[])
     await message.answer(
-        "Кратко опишите поведение (агрессия, стресс, лай, метки) или нажмите «Нет».",
+        "Отметьте важные особенности поведения и ухода. Можно выбрать несколько пунктов.\n"
+        "Если ничего из списка нет, нажмите «Особенностей нет».",
+        reply_markup=behavior_kb(kind),
+    )
+
+
+async def _finish_behavior(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    selected = set(data.get("draft_behavior_selected") or [])
+    flags = BehaviorFlags(**{key: True for key in selected})
+    await state.update_data(draft_behavior=flags.model_dump())
+    await state.set_state(BookingForm.pet_health)
+    await message.answer(
+        "Есть дополнительные сведения о здоровье, лекарствах или уходе?\n"
+        "Напишите их одним сообщением или нажмите «Нет».",
         reply_markup=no_kb(),
     )
 
 
+@router.callback_query(BookingForm.pet_behavior, F.data.startswith("beh:"))
+async def toggle_behavior(callback: CallbackQuery, state: FSMContext) -> None:
+    action = (callback.data or "").split(":", 1)[1]
+    data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    selected = set(data.get("draft_behavior_selected") or [])
+    if action == "none":
+        selected.clear()
+        await state.update_data(draft_behavior_selected=[])
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer()
+        await _finish_behavior(callback.message, state)
+        return
+    if action == "done":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer()
+        await _finish_behavior(callback.message, state)
+        return
+    allowed = set(BehaviorFlags.model_fields)
+    if action not in allowed:
+        await callback.answer("Неизвестный вариант", show_alert=True)
+        return
+    if action in selected:
+        selected.remove(action)
+    else:
+        selected.add(action)
+    await state.update_data(draft_behavior_selected=sorted(selected))
+    await callback.message.edit_reply_markup(reply_markup=behavior_kb(kind, selected))
+    await callback.answer()
+
+
 @router.message(BookingForm.pet_behavior)
-async def set_behavior(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip().lower()
-    flags = BehaviorFlags()
-    raw = ""
-    if text not in {"нет", "нет особенностей", "-"}:
-        raw = message.text or ""
-        if "агресс" in text:
-            flags.aggression = True
-            flags.zoo_aggression = True
-        if "стресс" in text:
-            flags.high_stress = True
-        if "лай" in text or "лает" in text:
-            flags.loud_barking = True
-        if "метит" in text or "метк" in text:
-            flags.marks_territory = True
-        if "грыз" in text:
-            flags.chews_furniture = True
-        if "стар" in text or "пожил" in text:
-            flags.elderly = True
-        if "подвиж" in text or "хромот" in text or "не ходит" in text:
-            flags.mobility_limited = True
-    await state.update_data(draft_behavior=flags.model_dump(), draft_behavior_raw=raw)
-    await state.set_state(BookingForm.pet_health)
+async def behavior_requires_buttons(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    selected = set(data.get("draft_behavior_selected") or [])
     await message.answer(
-        "Особенности здоровья / лечение / инвалидность? Или «Нет».",
-        reply_markup=no_kb(),
+        "Пожалуйста, отметьте особенности кнопками — так важная информация не потеряется.",
+        reply_markup=behavior_kb(kind, selected),
     )
 
 
@@ -503,44 +649,10 @@ async def passport_done(message: Message, state: FSMContext) -> None:
             "Фото паспорта нет — помечу заявку как неполную для владельца."
         )
 
-    kind = PetKind(data["draft_kind"])
-    age_months = data.get("draft_age_months")
-    pet = PetProfile(
-        kind=kind,
-        name=data["draft_name"],
-        breed=data.get("draft_breed"),
-        age_months=age_months,
-        weight_kg=data.get("draft_weight"),
-        is_puppy_or_kitten=is_young(kind, age_months),
-        vaccinated=data.get("draft_vaccinated"),
-        parasite_treated=data.get("draft_parasite"),
-        behavior=BehaviorFlags.model_validate(data.get("draft_behavior") or {}),
-        health_notes=data.get("draft_health"),
-        passport_file_ids=passport_ids,
-    )
-    pets = list(data.get("pets") or [])
-    pets.append(pet.model_dump(mode="json"))
     await state.update_data(
-        pets=pets,
         placement_flags=sorted(set(incomplete_flags)),
-        draft_kind=None,
-        draft_name=None,
-        draft_breed=None,
-        draft_age_months=None,
-        draft_weight=None,
-        draft_vaccinated=None,
-        draft_parasite=None,
-        draft_behavior=None,
-        draft_behavior_raw=None,
-        draft_health=None,
-        draft_passport_ids=[],
     )
-    await state.set_state(BookingForm.add_another_pet)
-    young = " (щенок/котёнок)" if pet.is_puppy_or_kitten else ""
-    await message.answer(
-        f"Питомец «{pet.name}»{young} добавлен. Всего: {len(pets)}.",
-        reply_markup=add_pet_kb(),
-    )
+    await _store_current_pet(message, state, passport_ids=passport_ids)
 
 
 @router.message(BookingForm.add_another_pet)
@@ -580,7 +692,11 @@ async def _run_placement(
     try:
         occupied = booking_service.occupied_catalog_ids(date_from, date_to)
     except SheetsUnavailableError:
-        await state.update_data(unit_id=None, manual_matching=True, placement_flags=["sheets_unavailable"])
+        logger.exception(
+            "availability check failed date_from=%s date_to=%s", date_from, date_to
+        )
+        flags = sorted(set(data.get("placement_flags") or []) | {"sheets_unavailable"})
+        await state.update_data(unit_id=None, manual_matching=True, placement_flags=flags)
         await state.set_state(BookingForm.feeding)
         await message.answer(
             "Календарь занятости сейчас недоступен — не могу показать свободные места.\n"
@@ -593,8 +709,9 @@ async def _run_placement(
         return
 
     result = PlacementService(catalog).suggest(pets, occupied_unit_ids=occupied)
+    flags = sorted(set(data.get("placement_flags") or []) | set(result.owner_flags))
     await state.update_data(
-        placement_flags=result.owner_flags,
+        placement_flags=flags,
         requires_manual=result.requires_manual_matching,
     )
 
@@ -629,7 +746,9 @@ async def _run_placement(
             f"Залог: {quote.deposit_rub} ₽"
         )
         if cand.reasons:
-            caption += "\n" + ", ".join(cand.reasons[:2])
+            caption += "\nПочему подходит: " + "; ".join(
+                placement_reason_label(reason) for reason in cand.reasons[:2]
+            )
         if quote.provisional or cand.requires_owner_review:
             caption += "\n⚠️ требует подтверждения владельцем"
 
@@ -684,7 +803,18 @@ async def set_feeding(message: Message, state: FSMContext, catalog: Catalog) -> 
         return
     await state.update_data(feeding=feeding.value, service_ids=[])
     await state.set_state(BookingForm.services)
-    items = [(s.id, s.name, False) for s in _popular_services(catalog)]
+    data = await state.get_data()
+    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    available = _available_services(catalog, pets)
+    items = [(s.id, s.name, False) for s in available]
+    if not items:
+        await state.set_state(BookingForm.promo)
+        await message.answer(
+            "Для этих питомцев дополнительных услуг в каталоге пока нет.\n"
+            "Есть промокод? Пришлите его или нажмите «Нет».",
+            reply_markup=no_kb(),
+        )
+        return
     await message.answer(
         "Дополнительные услуги (можно несколько). Нажмите «Готово», когда закончите.",
         reply_markup=services_kb(items),
@@ -696,6 +826,9 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
     action = callback.data.split(":", 1)[1]
     data = await state.get_data()
     selected = set(data.get("service_ids") or [])
+    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    available = _available_services(catalog, pets)
+    allowed_ids = {service.id for service in available}
 
     if action in {"none", "done"}:
         if action == "none":
@@ -712,12 +845,15 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
         await callback.answer()
         return
 
+    if action not in allowed_ids:
+        await callback.answer("Эта услуга не подходит выбранным питомцам", show_alert=True)
+        return
     if action in selected:
         selected.remove(action)
     else:
         selected.add(action)
     await state.update_data(service_ids=sorted(selected))
-    items = [(s.id, s.name, s.id in selected) for s in _popular_services(catalog)]
+    items = [(s.id, s.name, s.id in selected) for s in available]
     await callback.message.edit_reply_markup(reply_markup=services_kb(items))
     await callback.answer()
 
@@ -725,7 +861,22 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
 @router.message(BookingForm.promo)
 async def set_promo(message: Message, state: FSMContext, catalog: Catalog) -> None:
     text = (message.text or "").strip()
-    promo = None if text.lower() in {"нет", "-", "нет промокода"} else text
+    promo = None if text.lower() in {"нет", "-", "нет промокода"} else text.strip().upper()
+    if promo:
+        data = await state.get_data()
+        pricing = PricingService(catalog)
+        rule = pricing.find_active_promo(
+            promo,
+            date_from=date.fromisoformat(data["date_from"]),
+        )
+        if rule is None:
+            await message.answer(
+                "Такой промокод не найден, ещё не действует или уже закончился.\n"
+                "Проверьте написание либо нажмите «Нет».",
+                reply_markup=no_kb(),
+            )
+            return
+        await message.answer("Промокод принят — скидка появится в расчёте.")
     await state.update_data(promo_code=promo)
     # Build a fake callback-like summary via helper
     await _show_summary_message(message, state, catalog)
@@ -739,19 +890,7 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
     unit_id = data.get("unit_id")
     promo = data.get("promo_code")
 
-    lines = [
-        "Проверьте заявку:",
-        f"Даты: {data['date_from']} → {data['date_to']}",
-        f"Питомцы: {', '.join(p.name for p in pets)}",
-        f"Питание: {data.get('feeding')}",
-    ]
-    if service_ids:
-        names = [catalog.get_service(sid).name if catalog.get_service(sid) else sid for sid in service_ids]
-        lines.append("Услуги: " + ", ".join(names))
-    else:
-        lines.append("Услуги: нет")
-    lines.append(f"Промокод: {promo or '—'}")
-
+    quote = None
     if unit_id:
         unit = catalog.get_accommodation(unit_id)
         if unit:
@@ -770,22 +909,16 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
                 quote_explanation=quote.explanation,
                 quote_provisional=quote.provisional,
             )
-            lines.append(f"Место: {unit.name}")
-            lines.append(f"Предварительно: {quote.total_rub} ₽")
-            lines.append(f"Залог: {quote.deposit_rub} ₽")
-            if quote.provisional:
-                lines.append("(часть сумм ориентировочная)")
     else:
         deposit = PricingService(catalog).deposit_amount(len(pets) or 1)
         await state.update_data(price_total=None, deposit_amount=deposit)
-        lines.append("Место: ручной подбор владельцем")
-        lines.append(f"Залог (ориентир): {deposit} ₽")
-
-    if data.get("requires_manual") or data.get("manual_matching"):
-        lines.append("Флаги: " + ", ".join(data.get("placement_flags") or ["manual"]))
 
     await state.set_state(BookingForm.confirm_submit)
-    await message.answer("\n".join(lines), reply_markup=submit_kb())
+    refreshed = await state.get_data()
+    await message.answer(
+        format_draft_summary(data=refreshed, pets=pets, catalog=catalog, quote=quote),
+        reply_markup=submit_kb(),
+    )
 
 
 @router.callback_query(BookingForm.confirm_submit, F.data == "submit:yes")
@@ -817,8 +950,10 @@ async def submit_yes(
             placement_flags=list(data.get("placement_flags") or []),
             manual_matching=bool(data.get("manual_matching") or data.get("requires_manual")),
             promo_code=data.get("promo_code"),
+            customer_contact=data.get("customer_contact"),
         )
     except SheetsUnavailableError:
+        logger.exception("booking submit failed: Sheets unavailable")
         await callback.message.answer(
             "Календарь недоступен — заявку сейчас сохранить с проверкой занятости нельзя. "
             "Попробуйте позже или напишите владельцу напрямую."
@@ -832,7 +967,12 @@ async def submit_yes(
             )
             await callback.answer()
             return
-        raise
+        logger.exception("booking submit failed with invalid data: %s", exc)
+        await callback.message.answer(
+            "Не удалось отправить заявку из-за ошибки в данных. Проверьте анкету или начните заново: /start"
+        )
+        await callback.answer()
+        return
 
     summary = format_owner_summary(booking, catalog)
     if owner_chat_id and callback.bot:
@@ -852,13 +992,14 @@ async def submit_yes(
                 except Exception:
                     pass
         await callback.message.answer(
-            f"Заявку {booking.id} отправил владельцу.\n"
+            f"Заявка №{booking.id} отправлена владельцу.\n"
             "Ожидайте решения. Реквизиты придут только после подтверждения.\n"
             "Статус: /status"
         )
     else:
         await callback.message.answer(
-            f"Заявку {booking.id} сохранил, но OWNER_CHAT_ID не задан."
+            "Заявка сохранена, но уведомление владельцу сейчас недоступно. "
+            "Пожалуйста, свяжитесь с зоогостиницей напрямую."
         )
 
     await state.clear()
@@ -909,8 +1050,11 @@ async def _accept_receipt(
         return True
     try:
         booking = await booking_service.attach_receipt(booking.id, file_id)
-    except Exception as exc:
-        await message.answer(f"Не принял чек: {exc}")
+    except Exception:
+        logger.exception("receipt attach failed booking=%s", booking.id)
+        await message.answer(
+            "Не удалось сохранить чек. Попробуйте отправить его ещё раз немного позже."
+        )
         return True
 
     await message.answer(

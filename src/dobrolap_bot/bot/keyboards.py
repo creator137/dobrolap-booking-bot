@@ -1,5 +1,8 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from dobrolap_bot.bot.presentation import BEHAVIOR_LABELS
+from dobrolap_bot.domain.enums import PetKind
+
 
 def yes_no_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -13,6 +16,17 @@ def no_kb() -> ReplyKeyboardMarkup:
     """Optional free-text step: skip with «Нет» or type an answer."""
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="Нет")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def contact_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📱 Поделиться номером", request_contact=True)],
+            [KeyboardButton(text="Ввести номер вручную")],
+        ],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -74,6 +88,48 @@ def feeding_kb() -> ReplyKeyboardMarkup:
     )
 
 
+def behavior_kb(kind: PetKind, selected: set[str] | None = None) -> InlineKeyboardMarkup:
+    selected = selected or set()
+    if kind == PetKind.CAT:
+        keys = [
+            "zoo_aggression",
+            "high_stress",
+            "distrust_humans",
+            "marks_territory",
+            "chews_furniture",
+            "mobility_limited",
+            "needs_treatment",
+            "disability",
+        ]
+    else:
+        keys = [
+            "aggression",
+            "high_stress",
+            "loud_barking",
+            "elderly",
+            "mobility_limited",
+            "incontinence",
+            "needs_treatment",
+            "disability",
+        ]
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=("✅ " if key in selected else "") + BEHAVIOR_LABELS[key].capitalize(),
+                callback_data=f"beh:{key}",
+            )
+        ]
+        for key in keys
+    ]
+    rows.extend(
+        [
+            [InlineKeyboardButton(text="Особенностей нет", callback_data="beh:none")],
+            [InlineKeyboardButton(text="Готово — продолжить", callback_data="beh:done")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def unit_choice_kb(unit_ids: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=title[:64], callback_data=f"unit:{uid}")]
@@ -120,6 +176,24 @@ def owner_actions_kb(booking_id: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"own:reject:{booking_id}")],
         ]
     )
+
+
+def owner_unit_choice_kb(
+    booking_id: str, units: list[tuple[str, str]]
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=title[:64],
+                callback_data=f"ownunit:{booking_id}:{unit_id}",
+            )
+        ]
+        for unit_id, title in units
+    ]
+    rows.append(
+        [InlineKeyboardButton(text="Закрыть список", callback_data=f"ownunit:{booking_id}:close")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def owner_paid_kb(booking_id: str) -> InlineKeyboardMarkup:

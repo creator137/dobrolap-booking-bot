@@ -11,6 +11,7 @@ from dobrolap_bot.domain.models import (
     PriceQuote,
     QuoteLine,
     ServiceOffering,
+    PriceRule,
 )
 
 
@@ -173,6 +174,26 @@ class PricingService:
             pet_count = 1
         extra = max(pet_count - 1, 0)
         return self.catalog.deposit_base_rub + extra * self.catalog.deposit_extra_pet_rub
+
+    def find_active_promo(self, promo_code: str, *, date_from: date) -> PriceRule | None:
+        """Return a currently applicable promo rule without changing quote semantics."""
+        normalized = promo_code.strip().upper()
+        if not normalized:
+            return None
+        for rule in self.catalog.price_rules:
+            if not rule.active or rule.scope != PriceScope.DISCOUNT:
+                continue
+            configured = rule.condition.get("promo_code")
+            if not configured or normalized != str(configured).strip().upper():
+                continue
+            if rule.date_from and date_from < rule.date_from:
+                continue
+            if rule.date_to and date_from > rule.date_to:
+                continue
+            if rule.percent is None and rule.amount_rub is None:
+                continue
+            return rule
+        return None
 
     def _find_rate(self, pet: PetProfile, tariff_kind: str) -> DailyRate | None:
         size = pet.dog_size

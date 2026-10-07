@@ -3,6 +3,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class BookingForm(StatesGroup):
     consent = State()
+    contact = State()
     dates = State()
     pet_kind = State()
     pet_name = State()
@@ -26,7 +27,6 @@ class BookingForm(StatesGroup):
 
 class OwnerForm(StatesGroup):
     ask_question = State()
-    suggest_unit = State()
     reject_reason = State()
     cancel_reason = State()
     refund_note = State()

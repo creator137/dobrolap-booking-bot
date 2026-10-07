@@ -65,6 +65,7 @@ def test_inactive_promo_not_applied(pricing, catalog):
     # Placeholder promo must stay inactive in config
     assert q.total_rub == 1900 * 2
     assert not any(ln.scope == PriceScope.DISCOUNT for ln in q.lines)
+    assert pricing.find_active_promo("DOBROLAP5", date_from=date(2026, 10, 10)) is None
 
 
 def test_promo_discount_when_rule_active(pricing, catalog):
@@ -74,6 +75,9 @@ def test_promo_discount_when_rule_active(pricing, catalog):
     rule = next(r for r in catalog.price_rules if r.id == "promo_5pct_2026")
     rule.active = True
     try:
+        assert pricing.find_active_promo(
+            "dobrolap5", date_from=date(2026, 10, 10)
+        ) is rule
         q = pricing.quote(
             pets=[pet],
             unit=unit,

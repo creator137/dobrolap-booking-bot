@@ -13,7 +13,7 @@ from dobrolap_bot.domain.models import PetProfile
 from dobrolap_bot.integrations.google_sheets import InMemorySheetsGateway, SheetBooking
 from dobrolap_bot.repositories.sqlite import SqliteRepository
 from dobrolap_bot.services.booking import BookingService, InvalidTransitionError
-from dobrolap_bot.services.summary import format_owner_summary
+from dobrolap_bot.services.summary import format_client_status, format_owner_summary
 
 
 @pytest.fixture
@@ -57,11 +57,17 @@ async def test_full_happy_path(booking_service, catalog):
         service_ids=["nail_trim"],
         placement_flags=[],
         manual_matching=False,
+        customer_contact="+79001234567",
     )
     assert booking.status == BookingStatus.WAITING_OWNER
     assert quote is not None
     assert quote.total_rub > 0
-    assert "Биби" in format_owner_summary(booking, catalog)
+    owner_card = format_owner_summary(booking, catalog)
+    assert "+79001234567" in owner_card
+    assert "WAITING_OWNER" not in owner_card
+    stored = await booking_service.get(booking.id)
+    assert stored is not None
+    assert stored.customer_contact == "+79001234567"
 
     booking = await booking_service.approve(booking.id)
     assert booking.status == BookingStatus.WAITING_PAYMENT
@@ -72,6 +78,9 @@ async def test_full_happy_path(booking_service, catalog):
 
     booking = await booking_service.confirm_payment(booking.id)
     assert booking.status == BookingStatus.CONFIRMED
+    client_card = format_client_status(booking, catalog)
+    assert "Бронь подтверждена" in client_card
+    assert "CONFIRMED" not in client_card
 
 
 @pytest.mark.asyncio

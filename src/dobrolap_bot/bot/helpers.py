@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import re
 
 from dobrolap_bot.domain.enums import FeedingOption, PetKind
 
@@ -57,6 +58,31 @@ def is_young(kind: PetKind, age_months: int | None) -> bool:
     if kind == PetKind.CAT:
         return age_months < 7
     return False
+
+
+def normalize_phone(text: str) -> str | None:
+    raw = text.strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    if len(digits) < 10 or len(digits) > 15:
+        return None
+    return "+" + digits
+
+
+def parse_age_months(text: str) -> int | None:
+    value = text.strip().lower().replace("ё", "е")
+    if value.isdigit():
+        months = int(value)
+        return months if 0 <= months <= 400 else None
+    years_match = re.search(r"(\d+)\s*(?:г(?:од(?:а|ов)?)?|лет)", value)
+    months_match = re.search(r"(\d+)\s*мес", value)
+    if not years_match and not months_match:
+        return None
+    years = int(years_match.group(1)) if years_match else 0
+    months = int(months_match.group(1)) if months_match else 0
+    total = years * 12 + months
+    return total if 0 <= total <= 400 and months < 12 else None
 
 
 # Backwards-compatible aliases for tests

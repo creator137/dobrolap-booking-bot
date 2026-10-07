@@ -10,6 +10,7 @@ from datetime import datetime
 from aiogram import Bot
 
 from dobrolap_bot.domain.enums import BookingStatus
+from dobrolap_bot.bot.presentation import format_datetime
 from dobrolap_bot.services.booking import BookingService
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ async def _tick(
                     continue
                 text = (
                     f"Напоминание: по заявке {booking.id} оплата ещё не подтверждена.\n"
-                    f"Резерв действует до {expires.isoformat()}."
+                    f"Резерв действует до {format_datetime(expires)} (МСК)."
                 )
                 client_id = booking.customer_telegram_id
                 if client_id:
@@ -103,7 +104,8 @@ async def _tick(
                 try:
                     await bot.send_message(
                         owner_chat_id,
-                        f"⚠️ Не удалось освободить календарь по просроченной заявке {booking.id}: {exc}",
+                        f"⚠️ Не удалось освободить место по просроченной заявке №{booking.id}. "
+                        "Google Sheets недоступен; система повторит попытку автоматически.",
                     )
                 except Exception:
                     pass
@@ -126,7 +128,7 @@ async def _tick(
             try:
                 await bot.send_message(
                     owner_chat_id,
-                    f"⌛ Заявка {expired.id} истекла (EXPIRED), место освобождено.",
+                    f"⌛ Срок оплаты по заявке №{expired.id} истёк, место освобождено.",
                 )
             except Exception:
                 logger.exception("expire notice to owner failed booking=%s", expired.id)

@@ -181,11 +181,12 @@ class BookingService:
         placement_flags: list[str],
         manual_matching: bool,
         promo_code: str | None = None,
+        customer_contact: str | None = None,
     ) -> tuple[BookingRecord, PriceQuote | None]:
         customer_id = await self.repo.upsert_customer(
             telegram_user_id=telegram_user_id,
             name=customer_name or username,
-            contact=f"@{username}" if username else None,
+            contact=customer_contact or (f"@{username}" if username else None),
             consent_at=consent_at,
         )
 
@@ -218,6 +219,7 @@ class BookingService:
             "quote_explanation": quote.explanation if quote else None,
             "quote_provisional": quote.provisional if quote else True,
             "client_username": username,
+            "customer_contact": customer_contact,
             "receipt_file_ids": [],
             "owner_messages": [],
         }

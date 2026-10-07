@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from aiogram import F, Router
 from aiogram.filters import BaseFilter
 from aiogram.fsm.context import FSMContext
@@ -10,14 +12,18 @@ from dobrolap_bot.bot.keyboards import (
     client_reply_kb,
     owner_actions_kb,
     owner_refund_kb,
+    owner_unit_choice_kb,
 )
 from dobrolap_bot.bot.states import BookingForm, OwnerForm
 from dobrolap_bot.config.loader import Catalog
-from dobrolap_bot.domain.enums import BookingStatus
+from dobrolap_bot.domain.enums import BookingStatus, FeedingOption
+from dobrolap_bot.domain.models import PetProfile
+from dobrolap_bot.integrations.google_sheets import SheetsUnavailableError
 from dobrolap_bot.services.booking import BookingService, InvalidTransitionError
 from dobrolap_bot.services.summary import format_client_status, format_owner_summary
 
 router = Router(name="owner")
+logger = logging.getLogger(__name__)
 
 
 class OwnerOnly(BaseFilter):
@@ -55,6 +61,13 @@ async def owner_approve(
     _, booking_id = parsed
     try:
         booking = await booking_service.approve(booking_id)
+    except InvalidTransitionError:
+        logger.exception("owner approve invalid transition booking=%s", booking_id)
+        await callback.message.answer(
+            "Действие уже неактуально: статус заявки изменился. Откройте свежую карточку."
+        )
+        await callback.answer()
+        return
     except ValueError as exc:
         msg = str(exc)
         if msg == "unit_required":
@@ -67,15 +80,17 @@ async def owner_approve(
                 "Предложите другой вариант или отклоните заявку."
             )
         else:
-            await callback.message.answer(f"Не могу подтвердить: {exc}")
+            logger.warning("owner approve rejected booking=%s reason=%s", booking_id, exc)
+            await callback.message.answer(
+                "Не удалось подтвердить заявку. Обновите карточку и попробуйте ещё раз."
+            )
         await callback.answer()
         return
-    except InvalidTransitionError as exc:
-        await callback.message.answer(f"Неверный статус: {exc}")
-        await callback.answer()
-        return
-    except Exception as exc:
-        await callback.message.answer(f"Календарь недоступен: {exc}")
+    except Exception:
+        logger.exception("owner approve failed booking=%s", booking_id)
+        await callback.message.answer(
+            "Не удалось проверить календарь Google Sheets. Бронь не подтверждена — попробуйте позже."
+        )
         await callback.answer()
         return
 
@@ -88,10 +103,13 @@ async def owner_approve(
 
     client_id = booking.customer_telegram_id
     if client_id and callback.bot:
-        pay_text = payment_instructions.strip() or (
-            "Реквизиты не заданы в .env (PAYMENT_INSTRUCTIONS). "
-            "Свяжитесь с владельцем напрямую."
-        )
+        pay_text = payment_instructions.strip()
+        if not pay_text:
+            logger.error("payment instructions are not configured booking=%s", booking_id)
+            pay_text = (
+                "Платёжные реквизиты временно недоступны. "
+                "Владелец зоогостиницы свяжется с вами отдельно."
+            )
         await callback.bot.send_message(
             client_id,
             "Вашу заявку подтвердили ✅\n\n"
@@ -163,9 +181,10 @@ async def owner_reject_finish(
         reason = None
     try:
         booking = await booking_service.reject(booking_id, reason)
-    except InvalidTransitionError as exc:
+    except InvalidTransitionError:
+        logger.exception("owner reject invalid transition booking=%s", booking_id)
         await state.clear()
-        await message.answer(f"Нельзя отклонить: {exc}")
+        await message.answer("Заявку уже нельзя отклонить: её статус изменился.")
         return
     await state.clear()
     await message.answer(f"Заявка {booking_id} отклонена.")
@@ -218,18 +237,22 @@ async def owner_cancel_finish(
             actor="owner",
             refund_pending=was_confirmed,
         )
-    except InvalidTransitionError as exc:
+    except InvalidTransitionError:
+        logger.exception("owner cancel invalid transition booking=%s", booking_id)
         await state.clear()
-        await message.answer(f"Нельзя отменить: {exc}")
+        await message.answer("Бронь уже нельзя отменить: её статус изменился.")
         return
-    except Exception as exc:
-        await message.answer(f"Календарь/отмена не удались: {exc}")
+    except Exception:
+        logger.exception("owner cancel failed booking=%s", booking_id)
+        await message.answer(
+            "Не удалось освободить место в календаре. Бронь не изменена; попробуйте позже."
+        )
         return
 
     await state.clear()
     try:
         await message.answer(
-            f"Бронь {booking_id} отменена (CANCELLED).\n" + format_owner_summary(booking, catalog),
+            f"Бронь №{booking_id} отменена.\n" + format_owner_summary(booking, catalog),
             reply_markup=owner_refund_kb(booking_id)
             if (booking.payload.get("refund") or {}).get("status") == "pending"
             else None,
@@ -283,9 +306,10 @@ async def owner_refund_finish(
         note = None
     try:
         booking = await booking_service.mark_refund(booking_id, note)
-    except InvalidTransitionError as exc:
+    except InvalidTransitionError:
+        logger.exception("owner refund invalid transition booking=%s", booking_id)
         await state.clear()
-        await message.answer(f"Нельзя отметить возврат: {exc}")
+        await message.answer("Возврат сейчас нельзя отметить: статус заявки изменился.")
         return
     await state.clear()
     await message.answer(f"Возврат по {booking_id} отмечен.")
@@ -335,61 +359,140 @@ async def owner_ask_finish(
 
 
 @router.callback_query(F.data.startswith("own:alt:"))
-async def owner_alt_start(callback: CallbackQuery, state: FSMContext, catalog: Catalog) -> None:
+async def owner_alt_start(
+    callback: CallbackQuery,
+    booking_service: BookingService,
+    catalog: Catalog,
+) -> None:
     parsed = _parse_owner_cb(callback.data or "")
     if not parsed:
         await callback.answer()
         return
     _, booking_id = parsed
-    await state.set_state(OwnerForm.suggest_unit)
-    await state.update_data(owner_booking_id=booking_id)
-    units = "\n".join(f"• `{a.id}` — {a.name}" for a in catalog.active_accommodations())
+    booking = await booking_service.get(booking_id)
+    if booking is None:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    try:
+        occupied = booking_service.occupied_catalog_ids(
+            booking.date_from,
+            booking.date_to,
+            exclude_booking_id=booking.id,
+        )
+    except SheetsUnavailableError:
+        logger.exception("owner alternatives sheets unavailable booking=%s", booking_id)
+        await callback.message.answer(
+            "Не удалось проверить календарь Google Sheets. Свободные помещения не показаны, "
+            "чтобы случайно не предложить занятое место. Попробуйте позже."
+        )
+        await callback.answer()
+        return
+
+    pets = [PetProfile.model_validate(item) for item in booking.payload.get("pets") or []]
+    result = booking_service.placement.suggest(
+        pets,
+        occupied_unit_ids=occupied,
+        limit=len(catalog.accommodations),
+    )
+    choices: list[tuple[str, str]] = []
+    for candidate in result.candidates:
+        unit = candidate.accommodation
+        if unit.id == booking.unit_id:
+            continue
+        try:
+            feeding_raw = booking.payload.get("feeding")
+            feeding = FeedingOption(feeding_raw) if feeding_raw else None
+            quote = booking_service.pricing.quote(
+                pets=pets,
+                unit=unit,
+                date_from=booking.date_from,
+                date_to=booking.date_to,
+                feeding=feeding,
+                service_ids=list(booking.payload.get("service_ids") or []),
+                promo_code=booking.payload.get("promo_code"),
+            )
+            price = f" — {quote.total_rub:,} ₽".replace(",", " ")
+        except Exception:
+            logger.exception(
+                "owner alternative quote failed booking=%s unit=%s", booking_id, unit.id
+            )
+            price = " — цена уточняется"
+        choices.append((unit.id, f"{unit.name}{price}"))
+
+    if not choices:
+        await callback.message.answer(
+            "Других подходящих свободных помещений на эти даты сейчас нет."
+        )
+        await callback.answer()
+        return
     await callback.message.answer(
-        f"Предложите другой вариант для {booking_id}.\n"
-        f"Пришлите id помещения:\n{units}"
+        f"Выберите другое подходящее свободное помещение для заявки №{booking_id}:",
+        reply_markup=owner_unit_choice_kb(booking_id, choices),
     )
     await callback.answer()
 
 
-@router.message(OwnerForm.suggest_unit)
+@router.callback_query(F.data.startswith("ownunit:"))
 async def owner_alt_finish(
-    message: Message,
-    state: FSMContext,
+    callback: CallbackQuery,
     booking_service: BookingService,
     catalog: Catalog,
 ) -> None:
-    data = await state.get_data()
-    booking_id = data.get("owner_booking_id")
-    unit_id = (message.text or "").strip().strip("`")
-    if not booking_id:
-        await state.clear()
+    parts = (callback.data or "").split(":", 2)
+    if len(parts) != 3:
+        await callback.answer()
+        return
+    _, booking_id, unit_id = parts
+    if unit_id == "close":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("Список закрыт")
         return
     try:
         booking, quote = await booking_service.suggest_unit(booking_id, unit_id)
-    except ValueError as exc:
-        await message.answer(f"Не получилось: {exc}. Пришлите другой id.")
+    except SheetsUnavailableError:
+        logger.exception("owner suggest sheets unavailable booking=%s", booking_id)
+        await callback.message.answer(
+            "Календарь Google Sheets сейчас недоступен. Помещение не изменено."
+        )
+        await callback.answer()
         return
-    except InvalidTransitionError as exc:
-        await message.answer(f"Статус не позволяет: {exc}")
-        await state.clear()
+    except InvalidTransitionError:
+        logger.exception("owner suggest invalid transition booking=%s", booking_id)
+        await callback.message.answer(
+            "Помещение не изменено: статус заявки уже изменился."
+        )
+        await callback.answer()
+        return
+    except ValueError as exc:
+        logger.warning(
+            "owner suggest rejected booking=%s unit=%s reason=%s", booking_id, unit_id, exc
+        )
+        await callback.message.answer(
+            "Это помещение уже занято или больше не подходит. Откройте список вариантов заново."
+        )
+        await callback.answer()
         return
 
-    await state.clear()
+    await callback.message.edit_reply_markup(reply_markup=None)
     summary = format_owner_summary(booking, catalog)
-    await message.answer(
-        f"Вариант обновлён.\n{summary}\nПредварительно: {quote.total_rub} ₽",
+    await callback.message.answer(
+        f"Помещение в заявке обновлено.\n\n{summary}",
         reply_markup=owner_actions_kb(booking_id),
     )
     client_id = booking.customer_telegram_id
     unit = catalog.get_accommodation(unit_id)
-    if client_id and message.bot and unit:
-        await message.bot.send_message(
+    if client_id and callback.bot and unit:
+        total = f"{quote.total_rub:,}".replace(",", " ")
+        deposit = f"{quote.deposit_rub:,}".replace(",", " ")
+        await callback.bot.send_message(
             client_id,
             "Владелец предложил другой вариант размещения:\n"
             f"{unit.name}\n"
-            f"Предварительно: {quote.total_rub} ₽, залог {quote.deposit_rub} ₽\n"
+            f"Предварительная стоимость: {total} ₽\n"
+            f"Залог: {deposit} ₽\n"
             "Ожидайте подтверждения или ответьте на вопрос, если он придёт.",
         )
+    await callback.answer("Помещение изменено")
 
 
 @router.callback_query(F.data.startswith("own:paid:"))
@@ -405,6 +508,13 @@ async def owner_paid(
     _, booking_id = parsed
     try:
         booking = await booking_service.confirm_payment(booking_id)
+    except InvalidTransitionError:
+        logger.exception("owner payment invalid transition booking=%s", booking_id)
+        await callback.message.answer(
+            "Действие уже неактуально: статус заявки изменился."
+        )
+        await callback.answer()
+        return
     except ValueError as exc:
         if str(exc) == "receipt_required":
             await callback.message.answer(
@@ -413,11 +523,17 @@ async def owner_paid(
         elif str(exc) == "unit_required":
             await callback.message.answer("Для этой заявки не выбрано место в календаре. Выберите место и подтвердите заявку заново.")
         else:
-            await callback.message.answer(f"Не могу зафиксировать: {exc}")
+            logger.warning("owner payment rejected booking=%s reason=%s", booking_id, exc)
+            await callback.message.answer(
+                "Не удалось подтвердить оплату. Проверьте заявку и попробуйте ещё раз."
+            )
         await callback.answer()
         return
-    except InvalidTransitionError as exc:
-        await callback.message.answer(f"Неверный статус: {exc}")
+    except Exception:
+        logger.exception("owner payment confirmation failed booking=%s", booking_id)
+        await callback.message.answer(
+            "Не удалось обновить бронь в Google Sheets. Оплата не отмечена; попробуйте позже."
+        )
         await callback.answer()
         return
 
@@ -426,7 +542,7 @@ async def owner_paid(
     except Exception:
         pass
     await callback.message.answer(
-        f"Бронь {booking_id} подтверждена (CONFIRMED).\n" + format_owner_summary(booking, catalog)
+        f"Бронь №{booking_id} подтверждена.\n" + format_owner_summary(booking, catalog)
     )
     client_id = booking.customer_telegram_id
     if client_id and callback.bot:

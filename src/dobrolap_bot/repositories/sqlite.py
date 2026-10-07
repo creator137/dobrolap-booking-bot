@@ -72,6 +72,7 @@ class BookingRecord:
     updated_at: datetime = field(default_factory=_utcnow)
     customer_telegram_id: int | None = None
     customer_name: str | None = None
+    customer_contact: str | None = None
 
 
 class SqliteRepository:
@@ -235,7 +236,8 @@ class SqliteRepository:
     async def list_waiting_payment_holds(self) -> list[BookingRecord]:
         cur = await self.db.execute(
             """
-            SELECT b.*, c.telegram_user_id AS customer_telegram_id, c.name AS customer_name
+            SELECT b.*, c.telegram_user_id AS customer_telegram_id,
+                   c.name AS customer_name, c.contact AS customer_contact
             FROM bookings b
             JOIN customers c ON c.id = b.customer_id
             WHERE b.status = ?
@@ -249,7 +251,8 @@ class SqliteRepository:
     async def get_booking(self, booking_id: str) -> BookingRecord | None:
         cur = await self.db.execute(
             """
-            SELECT b.*, c.telegram_user_id AS customer_telegram_id, c.name AS customer_name
+            SELECT b.*, c.telegram_user_id AS customer_telegram_id,
+                   c.name AS customer_name, c.contact AS customer_contact
             FROM bookings b
             JOIN customers c ON c.id = b.customer_id
             WHERE b.id = ?
@@ -266,7 +269,8 @@ class SqliteRepository:
         statuses: list[BookingStatus] | None = None,
     ) -> BookingRecord | None:
         sql = """
-            SELECT b.*, c.telegram_user_id AS customer_telegram_id, c.name AS customer_name
+            SELECT b.*, c.telegram_user_id AS customer_telegram_id,
+                   c.name AS customer_name, c.contact AS customer_contact
             FROM bookings b
             JOIN customers c ON c.id = b.customer_id
             WHERE c.telegram_user_id = ?
@@ -289,7 +293,8 @@ class SqliteRepository:
         placeholders = ",".join("?" for _ in statuses)
         cur = await self.db.execute(
             f"""
-            SELECT b.*, c.telegram_user_id AS customer_telegram_id, c.name AS customer_name
+            SELECT b.*, c.telegram_user_id AS customer_telegram_id,
+                   c.name AS customer_name, c.contact AS customer_contact
             FROM bookings b
             JOIN customers c ON c.id = b.customer_id
             WHERE c.telegram_user_id = ? AND b.status IN ({placeholders})
@@ -328,4 +333,7 @@ class SqliteRepository:
                 int(row["customer_telegram_id"]) if "customer_telegram_id" in keys else None
             ),
             customer_name=row["customer_name"] if "customer_name" in keys else None,
+            customer_contact=(
+                row["customer_contact"] if "customer_contact" in keys else None
+            ),
         )

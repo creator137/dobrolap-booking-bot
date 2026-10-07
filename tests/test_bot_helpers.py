@@ -1,6 +1,6 @@
 from datetime import date
 
-from dobrolap_bot.bot.helpers import parse_dates, parse_yes
+from dobrolap_bot.bot.helpers import normalize_phone, parse_age_months, parse_dates, parse_yes
 
 
 def test_parse_dates():
@@ -14,3 +14,16 @@ def test_yes_helper():
     assert parse_yes("Да") is True
     assert parse_yes("нет") is False
     assert parse_yes("maybe") is None
+
+
+def test_normalize_phone():
+    assert normalize_phone("8 (900) 123-45-67") == "+79001234567"
+    assert normalize_phone("+7 900 123 45 67") == "+79001234567"
+    assert normalize_phone("123") is None
+
+
+def test_parse_age_for_humans():
+    assert parse_age_months("18") == 18
+    assert parse_age_months("8 месяцев") == 8
+    assert parse_age_months("2 года 3 месяца") == 27
+    assert parse_age_months("не знаю") is None
