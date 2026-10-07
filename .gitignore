@@ -9,3 +9,18 @@ ChatExport_*/
 # Python artifacts
 __pycache__/
 *.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+dist/
+build/
+
+# Runtime DB
+data/app.db
+data/*.db
+
+# Google service account keys
+**/service-account*.json
+**/*credentials*.json

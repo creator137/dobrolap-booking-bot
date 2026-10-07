@@ -1,0 +1,96 @@
+# Additional services from «Услуги Добролап.xlsx».
+# Range prices are provisional and require owner confirmation.
+
+services:
+  - id: hygiene_complex_dog
+    name: "Гигиенический комплекс (собаки)"
+    price_from_rub: 2500
+    price_to_rub: 7000
+    unit: once
+    applies_to: [dog]
+    notes: "Цена зависит от размера и шерсти (мини 2500–5000, средние 3500–6000, крупные 4000–7000)"
+
+  - id: bath_dry_dog
+    name: "Купание + сушка (собаки)"
+    price_from_rub: 1000
+    price_to_rub: 3600
+    unit: once
+    applies_to: [dog]
+
+  - id: brushing_dog
+    name: "Вычёсывание (собаки)"
+    price_from_rub: 1600
+    price_to_rub: 6000
+    unit: once
+    applies_to: [dog]
+    notes: "Линька +20%; колтуны отдельно от 300 ₽"
+
+  - id: grooming_cat
+    name: "Груминг (кошки)"
+    price_from_rub: 2500
+    price_to_rub: 5500
+    unit: once
+    applies_to: [cat]
+
+  - id: bath_dry_cat
+    name: "Купание + сушка (кошки)"
+    price_from_rub: 1800
+    price_to_rub: 3000
+    unit: once
+    applies_to: [cat]
+
+  - id: brushing_cat
+    name: "Вычёсывание (кошки)"
+    price_from_rub: 2000
+    price_to_rub: 4500
+    unit: once
+    applies_to: [cat]
+
+  - id: nail_trim
+    name: "Стрижка когтей"
+    price_from_rub: 200
+    price_to_rub: 350
+    unit: once
+
+  - id: med_care
+    name: "МедУход"
+    price_from_rub: 200
+    price_to_rub: 1500
+    unit: per_day
+    notes: "Прибавляется к дневной стоимости"
+
+  - id: zoo_taxi
+    name: "Зоотакси"
+    price_from_rub: 600
+    unit: one_way
+    notes: "Рекомендуется туда-обратно ×2"
+
+  - id: walk
+    name: "Выгул"
+    price_from_rub: 800
+    unit: visit
+
+  - id: dogsitter
+    name: "Догситтер"
+    price_from_rub: 900
+    unit: visit
+    applies_to: [dog]
+
+  - id: cat_nanny
+    name: "Котоняня"
+    price_from_rub: 700
+    unit: visit
+    applies_to: [cat]
+
+  - id: dog_trainer
+    name: "Кинолог"
+    price_from_rub: 600
+    unit: session
+    applies_to: [dog]
+
+  - id: natural_feeding
+    name: "Приготовление натурального питания"
+    price_from_rub: 150
+    price_to_rub: 250
+    unit: unclear
+    notes: "Единица тарификации (день/порция) не подтверждена владельцем"

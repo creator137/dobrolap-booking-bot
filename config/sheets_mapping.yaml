@@ -1,0 +1,18 @@
+# Optional mapping for the legacy service-account gateway.
+# Preferred path is Apps Script — see integrations/apps_script/Code.gs and docs/OWNER_SETUP.md.
+#
+# Apps Script creates/uses sheet "Bookings" with columns:
+# external_id | unit_id | date_from | date_to | status
+
+spreadsheet_id_env: GOOGLE_SHEETS_SPREADSHEET_ID
+sheet_name: Bookings
+header_row: 1
+
+columns:
+  external_id: A
+  unit_id: B
+  date_from: C
+  date_to: D
+  status: E
+
+date_format: "%Y-%m-%d"

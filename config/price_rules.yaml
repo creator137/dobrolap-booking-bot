@@ -1,0 +1,41 @@
+# Editable promotional / seasonal rules. Do not hardcode campaigns in Python.
+
+deposit:
+  base_rub: 2000
+  extra_pet_rub: 500
+
+price_rules:
+  - id: promo_5pct_2026
+    scope: discount
+    date_from: 2026-01-01
+    date_to: 2026-11-01
+    condition:
+      promo_code: "DOBROLAP5"  # placeholder code name — replace when owner confirms
+      applies_to: accommodation
+    percent: 5
+    priority: 10
+    stackable: false
+    active: true
+    description: "Временная акция 5% на проживание, однократно, не суммируется (до 2026-11-01)"
+
+  # Holidays / early booking — placeholders, inactive until owner provides numbers
+  - id: holiday_placeholder
+    scope: surcharge
+    condition:
+      tag: holiday
+    percent: null
+    amount_rub: null
+    priority: 50
+    stackable: true
+    active: false
+    description: "Праздничный тариф — даты и коэффициент уточнить"
+
+  - id: early_booking_placeholder
+    scope: discount
+    condition:
+      min_days_before_checkin: null
+    percent: null
+    priority: 40
+    stackable: false
+    active: false
+    description: "Скидка за раннее бронирование — условия уточнить"

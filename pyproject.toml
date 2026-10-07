@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dobrolap-booking-bot"
+version = "0.1.0"
+description = "MVP Telegram booking bot for Dobrolap pet hotel"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram>=3.13",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "PyYAML>=6.0",
+    "aiosqlite>=0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+sheets = [
+    "google-api-python-client>=2.140",
+    "google-auth>=2.34",
+]
+
+[project.scripts]
+dobrolap-bot = "dobrolap_bot.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
