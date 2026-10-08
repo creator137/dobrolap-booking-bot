@@ -107,6 +107,8 @@ class PlacementService:
             flags.append("needs_review:dog_special_condition")
         if pet.vaccinated is False and pet.kind == PetKind.DOG:
             flags.append("needs_review:dog_unvaccinated")
+        if pet.kind == PetKind.DOG and pet.weight_kg is not None and pet.dog_size is None:
+            flags.append("needs_review:weight_category_20_to_25_kg")
         if pet.health_notes:
             flags.append("needs_review:health_notes")
         if pet.behavior_notes and pet.behavior_notes.strip().lower() not in {"нет", "нет особенностей", "-"}:
@@ -253,15 +255,10 @@ class PlacementService:
         return True
 
     def _tariff_offered(self, pet: PetProfile, tariff_kind: str) -> bool:
-        size = pet.dog_size
-        young = pet.is_puppy_or_kitten
         matches = [
             r
             for r in self.catalog.daily_rates
-            if r.accommodation_tariff == tariff_kind
-            and r.pet_kind == pet.kind
-            and r.is_young == young
-            and (pet.kind != PetKind.DOG or r.size_class == size)
+            if r.matches_pet(pet, tariff_kind)
         ]
         if not matches:
             return False

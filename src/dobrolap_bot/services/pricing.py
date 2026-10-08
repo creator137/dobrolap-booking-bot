@@ -4,7 +4,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from dobrolap_bot.config.loader import Catalog
-from dobrolap_bot.domain.enums import FeedingOption, PetKind, PriceScope
+from dobrolap_bot.domain.enums import FeedingOption, PriceScope
 from dobrolap_bot.domain.models import (
     Accommodation,
     DailyRate,
@@ -69,7 +69,7 @@ class PricingService:
             day_price, day_provisional, detail = self._day_amount(rate)
             if unit.tariff_kind == "vip":
                 provisional = True
-                detail = (detail or "") + "; обычный VIP без цены в PDF"
+                detail = (detail or "") + "; обычный VIP без отдельной тарифной колонки в XLSX"
             amount = day_price * nights
             provisional = provisional or day_provisional
             lines.append(
@@ -207,15 +207,10 @@ class PricingService:
         return None
 
     def _find_rate(self, pet: PetProfile, tariff_kind: str) -> DailyRate | None:
-        size = pet.dog_size
-        young = pet.is_puppy_or_kitten
         exact = [
             r
             for r in self.catalog.daily_rates
-            if r.accommodation_tariff == tariff_kind
-            and r.pet_kind == pet.kind
-            and r.is_young == young
-            and (pet.kind != PetKind.DOG or r.size_class == size)
+            if r.matches_pet(pet, tariff_kind)
         ]
         if exact:
             return exact[0]

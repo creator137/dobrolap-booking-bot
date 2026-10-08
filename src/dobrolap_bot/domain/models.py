@@ -53,9 +53,11 @@ class PetProfile(BaseModel):
             return None
         if self.weight_kg < 10:
             return DogSizeClass.MINIATURE
-        if self.weight_kg < 20:
+        if self.weight_kg <= 20:
             return DogSizeClass.MEDIUM
-        return DogSizeClass.LARGE
+        if self.weight_kg >= 25:
+            return DogSizeClass.LARGE
+        return None  # the 2026 spreadsheet has no category for 20–25 kg
 
 
 class Accommodation(BaseModel):
@@ -104,10 +106,20 @@ class DailyRate(BaseModel):
     pet_kind: PetKind
     size_class: DogSizeClass | None = None
     is_young: bool = False  # puppy / kitten
+    under_one_month: bool = False
     price_rub: int | None = None
     price_from_rub: int | None = None
     price_to_rub: int | None = None
     unavailable: bool = False
+
+    def matches_pet(self, pet: PetProfile, tariff_kind: str) -> bool:
+        return (
+            self.accommodation_tariff == tariff_kind
+            and self.pet_kind == pet.kind
+            and self.is_young == pet.is_puppy_or_kitten
+            and self.under_one_month == (pet.age_months == 0 and pet.kind in {PetKind.DOG, PetKind.CAT})
+            and (pet.kind != PetKind.DOG or self.size_class == pet.dog_size)
+        )
 
 
 class ServiceOffering(BaseModel):

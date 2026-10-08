@@ -50,11 +50,11 @@ def parse_yes(text: str) -> bool | None:
 
 
 def is_young(kind: PetKind, age_months: int | None) -> bool:
-    """Puppy < 12 months; kitten < 7 months (from price sheet)."""
+    """Puppy through 12 months; kitten under 7 months (2026 price sheet)."""
     if age_months is None:
         return False
     if kind == PetKind.DOG:
-        return age_months < 12
+        return age_months <= 12
     if kind == PetKind.CAT:
         return age_months < 7
     return False
@@ -72,6 +72,12 @@ def normalize_phone(text: str) -> str | None:
 
 def parse_age_months(text: str) -> int | None:
     value = text.strip().lower().replace("ё", "е")
+    weeks_match = re.fullmatch(r"(\d+)\s*нед(?:ел(?:я|и|ь)?)?", value)
+    if weeks_match:
+        weeks = int(weeks_match.group(1))
+        return 0 if 0 < weeks < 4 else None
+    if value in {"меньше месяца", "до месяца", "менее месяца"}:
+        return 0
     if value.isdigit():
         months = int(value)
         return months if 0 <= months <= 400 else None

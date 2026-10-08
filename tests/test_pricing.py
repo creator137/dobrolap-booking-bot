@@ -124,12 +124,35 @@ def test_confirmed_pdf_prices_and_missing_puppy_tariff(pricing, catalog):
     start, end = date(2026, 10, 10), date(2026, 10, 11)
     kitten = PetProfile(kind=PetKind.CAT, name="Котёнок", age_months=3, is_puppy_or_kitten=True)
     assert pricing.quote(pets=[kitten], unit=catalog.get_accommodation("economy"),
-                         date_from=start, date_to=end).total_rub == 700
+                         date_from=start, date_to=end).total_rub == 750
     medium_puppy = PetProfile(kind=PetKind.DOG, name="Щенок", weight_kg=15,
                               age_months=4, is_puppy_or_kitten=True)
     assert pricing.quote(pets=[medium_puppy], unit=catalog.get_accommodation("standard_m"),
                          date_from=start, date_to=end).total_rub == 1750
+    assert pricing.quote(pets=[medium_puppy], unit=catalog.get_accommodation("vip_plus_house_reserve"),
+                         date_from=start, date_to=end).total_rub == 2400
     mini_puppy = medium_puppy.model_copy(update={"weight_kg": 5})
     quote = pricing.quote(pets=[mini_puppy], unit=catalog.get_accommodation("standard_l"),
                           date_from=start, date_to=end)
+    assert quote.provisional and quote.total_rub == 0
+
+
+def test_spreadsheet_under_one_month_vip_only(pricing, catalog):
+    start, end = date(2026, 10, 10), date(2026, 10, 11)
+    puppy = PetProfile(kind=PetKind.DOG, name="Щенок", age_months=0,
+                       weight_kg=6, is_puppy_or_kitten=True)
+    kitten = PetProfile(kind=PetKind.CAT, name="Котёнок", age_months=0,
+                        is_puppy_or_kitten=True)
+    vip = catalog.get_accommodation("vip_plus_house_reserve")
+    assert pricing.quote(pets=[puppy], unit=vip, date_from=start, date_to=end).total_rub == 2600
+    assert pricing.quote(pets=[kitten], unit=vip, date_from=start, date_to=end).total_rub == 1500
+    assert pricing.quote(pets=[kitten], unit=catalog.get_accommodation("economy"),
+                         date_from=start, date_to=end).provisional
+
+
+def test_spreadsheet_weight_gap_is_not_priced_as_large(pricing, catalog):
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=22)
+    quote = pricing.quote(pets=[pet], unit=catalog.get_accommodation("comfort"),
+                          date_from=date(2026, 10, 10), date_to=date(2026, 10, 11))
+    assert pet.dog_size is None
     assert quote.provisional and quote.total_rub == 0

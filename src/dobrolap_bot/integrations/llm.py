@@ -78,7 +78,8 @@ class OpenAiLlmAdapter:
         instructions = (
             "Extract only explicitly stated facts about this pet from the Russian text. "
             "Do not infer a diagnosis or turn negated traits into positive flags. "
-            "Age must be integer months; return null if ambiguous. "
+            "Age must be integer months; use 0 only when explicitly under one month, "
+            "and return null if ambiguous. "
             "Behavior flags: aggression (aggression to humans), zoo_aggression (to animals), "
             "high_stress, distrust_humans, marks_territory, chews_furniture, loud_barking, "
             "elderly, mobility_limited, incontinence, needs_treatment, disability. "

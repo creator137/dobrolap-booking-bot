@@ -138,6 +138,8 @@ def yes_no_unknown(value: bool | None) -> str:
 def format_age(months: int | None) -> str:
     if months is None:
         return "не указан"
+    if months == 0:
+        return "младше 1 месяца"
     if months < 12:
         suffix = "месяц" if months % 10 == 1 and months % 100 != 11 else "месяца"
         if months % 10 not in {1, 2, 3, 4} or months % 100 in {11, 12, 13, 14}:

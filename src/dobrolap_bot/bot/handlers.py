@@ -483,7 +483,8 @@ async def set_pet_breed(message: Message, state: FSMContext) -> None:
     await state.update_data(draft_breed=breed)
     await state.set_state(BookingForm.pet_age)
     await message.answer(
-        "Сколько питомцу лет и месяцев? Например: «2 года 3 месяца» или «8 месяцев»."
+        "Сколько питомцу лет и месяцев? Например: «2 года 3 месяца» или «8 месяцев». "
+        "Если меньше месяца, напишите число недель."
     )
 
 

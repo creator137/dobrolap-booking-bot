@@ -1,6 +1,7 @@
 from datetime import date
 
-from dobrolap_bot.bot.helpers import normalize_phone, parse_age_months, parse_dates, parse_yes
+from dobrolap_bot.bot.helpers import is_young, normalize_phone, parse_age_months, parse_dates, parse_yes
+from dobrolap_bot.domain.enums import PetKind
 
 
 def test_parse_dates():
@@ -26,4 +27,9 @@ def test_parse_age_for_humans():
     assert parse_age_months("18") == 18
     assert parse_age_months("8 месяцев") == 8
     assert parse_age_months("2 года 3 месяца") == 27
+    assert parse_age_months("3 недели") == 0
+    assert parse_age_months("1 неделя") == 0
+    assert parse_age_months("меньше месяца") == 0
+    assert is_young(PetKind.DOG, 12)
+    assert not is_young(PetKind.CAT, 7)
     assert parse_age_months("не знаю") is None
