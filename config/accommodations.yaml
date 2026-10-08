@@ -140,7 +140,7 @@ accommodations:
   - id: first_floor_workshop
     name: "Мастерская 1 этажа"
     sheet_unit_id: "1 этаж мастерская"
-    tariff_kind: comfort  # priced as comfort-class until owner maps exact tariff
+    tariff_kind: vip_plus
     allowed_species: [dog, cat]
     features: [indoor, ground_floor, workshop, private, vip]
     priority_tags: [elderly, incontinence, vip]
@@ -151,7 +151,7 @@ accommodations:
   - id: balcony
     name: "Балкон"
     sheet_unit_id: "2 этаж балкон"
-    tariff_kind: comfort
+    tariff_kind: vip_plus
     allowed_species: [dog, cat]
     features: [indoor, balcony, private, vip]
     priority_tags: [treatment, disability, vip]
@@ -163,6 +163,7 @@ accommodations:
     name: "Домик кухня"
     sheet_unit_id: "Домик Кухня"
     tariff_kind: home
+    tariff_unconfirmed: true
     allowed_species: [dog, cat]
     features: [indoor, house, private]
     priority_tags: [loud_barking, separate_house, vip]
@@ -174,7 +175,7 @@ accommodations:
   - id: second_floor_formulas
     name: "2 этаж, комната с формулами"
     sheet_unit_id: "2 этаж комната с формулами"
-    tariff_kind: comfort
+    tariff_kind: vip_plus
     allowed_species: [dog, cat]
     features: [indoor, private, vip]
     priority_tags: [vip]
@@ -193,7 +194,7 @@ accommodations:
   - id: second_floor_hall
     name: "2 этаж, зал"
     sheet_unit_id: "2 этаж комната-зал"
-    tariff_kind: comfort
+    tariff_kind: vip_plus
     allowed_species: [dog, cat]
     features: [indoor, hall, private, vip]
     priority_tags: [vip]
@@ -203,15 +204,14 @@ accommodations:
   - id: third_floor_workshop
     name: "Мастерская 3 этажа"
     sheet_unit_id: "3 этаж мастерская"
-    tariff_kind: comfort
+    tariff_kind: vip_plus
     allowed_species: [dog, cat]
     features: [indoor, workshop, private, vip]
     priority_tags: [vip]
     photo_paths:
       - assets/rooms/06-third-floor-workshop.jpg
 
-# Daily rates from the owner's 2026 accommodation spreadsheet.
-# Its interval above 20 and below 25 kg is sent for manual review.
+# Daily rates follow the owner's later clarification: large dogs are from 20 kg.
 # unavailable: true means that tariff cell is not offered for this pet class.
 daily_rates:
   # --- dogs miniature adult ---

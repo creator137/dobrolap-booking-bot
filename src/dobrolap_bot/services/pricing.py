@@ -11,7 +11,6 @@ from dobrolap_bot.domain.models import (
     PetProfile,
     PriceQuote,
     QuoteLine,
-    ServiceOffering,
     PriceRule,
 )
 
@@ -43,15 +42,39 @@ class PricingService:
         provisional = False
         notes: list[str] = []
 
-        # Accommodation: for multi-pet MVP we charge per pet against the same unit tariff
-        # unless owner later defines co-housing pricing. Flag in explanation.
+        # The group discount is known, but its interaction with the promotional
+        # discount cap is unresolved. Avoid showing a misleading final total.
         if len(pets) > 1:
+            provisional = True
             notes.append(
-                "Несколько питомцев: предварительный расчёт по каждому; "
-                "совместное размещение подтверждает владелец."
+                "Совместное размещение: заявлена скидка 50% на второго и каждого следующего питомца; "
+                "итог подтвердит оператор с учётом правил суммирования акций."
             )
 
         for pet in pets:
+            if unit.tariff_unconfirmed:
+                provisional = True
+                lines.append(
+                    QuoteLine(
+                        scope=PriceScope.ACCOMMODATION,
+                        label=f"Проживание: {unit.name} / {pet.name}",
+                        amount_rub=0,
+                        detail="Тариф этого помещения не подтверждён владельцем",
+                        provisional=True,
+                    )
+                )
+                continue
+            if len(pets) > 1:
+                lines.append(
+                    QuoteLine(
+                        scope=PriceScope.ACCOMMODATION,
+                        label=f"Проживание: {unit.name} / {pet.name}",
+                        amount_rub=0,
+                        detail="Сумму для совместного размещения рассчитает оператор",
+                        provisional=True,
+                    )
+                )
+                continue
             rate = self._find_rate(pet, unit.tariff_kind)
             if rate is None or rate.unavailable:
                 provisional = True
@@ -123,14 +146,15 @@ class PricingService:
             svc = self.catalog.get_service(sid)
             if svc is None or not svc.active:
                 continue
-            amount, svc_provisional, detail = self._service_amount(svc, nights=nights)
-            provisional = provisional or svc_provisional
+            svc_provisional = True
+            provisional = True
+            detail = "Стоимость сообщит оператор после уточнения деталей услуги"
             note = ", ".join(x for x in [svc.notes, detail] if x)
             lines.append(
                 QuoteLine(
                     scope=PriceScope.SERVICE,
                     label=svc.name,
-                    amount_rub=amount,
+                    amount_rub=0,
                     detail=note or None,
                     provisional=svc_provisional,
                 )
@@ -227,28 +251,6 @@ class PricingService:
                 f"Диапазон {rate.price_from_rub}{upper} ₽/сут., в расчёте нижняя граница",
             )
         return 0, True, "Цена не задана"
-
-    def _service_amount(
-        self, svc: ServiceOffering, *, nights: int
-    ) -> tuple[int, bool, str | None]:
-        base: int | None = None
-        provisional = False
-        if svc.price_from_rub is not None and svc.price_to_rub is not None:
-            base = svc.price_from_rub
-            provisional = svc.price_from_rub != svc.price_to_rub
-        elif svc.price_from_rub is not None:
-            base = svc.price_from_rub
-            provisional = True
-        else:
-            return 0, True, "Цена не задана"
-
-        unit = (svc.unit or "once").lower()
-        if unit in {"per_day", "day", "сутки", "сут"}:
-            return base * max(nights, 1), provisional, f"{base} ₽ × {nights} сут."
-        if unit in {"visit", "session", "one_way", "once", "unclear"}:
-            # Quantity UI not collected yet — quote one unit; mark unclear as provisional.
-            return base, provisional or unit == "unclear", f"единица: {unit}"
-        return base, True, f"неизвестная единица тарификации: {unit}"
 
     def _apply_discounts(
         self,

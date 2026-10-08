@@ -196,6 +196,7 @@ class BookingService:
         promo_code: str | None = None,
         customer_contact: str | None = None,
         requested_sheet_label: str | None = None,
+        service_details: dict[str, Any] | None = None,
     ) -> tuple[BookingRecord, PriceQuote | None]:
         customer_id = await self.repo.upsert_customer(
             telegram_user_id=telegram_user_id,
@@ -243,6 +244,7 @@ class BookingService:
             "pets": [p.model_dump(mode="json") for p in pets],
             "feeding": feeding.value if feeding else None,
             "service_ids": service_ids,
+            "service_details": service_details or {},
             "placement_flags": placement_flags,
             "manual_matching": manual_matching,
             "promo_code": promo_code,
@@ -264,7 +266,11 @@ class BookingService:
             date_to=date_to,
             status=BookingStatus.WAITING_OWNER,
             unit_id=unit_id,
-            price_total=quote.total_rub if quote else None,
+            price_total=(
+                quote.total_rub
+                if quote and quote.has_accommodation_amount
+                else None
+            ),
             deposit_amount=(
                 quote.deposit_rub
                 if quote
@@ -598,7 +604,9 @@ class BookingService:
             self.sheets.release_booking(booking_id=booking.id, unit_id=held)
         booking.status = target
         booking.unit_id = unit_id
-        booking.price_total = quote.total_rub
+        booking.price_total = (
+            quote.total_rub if quote.has_accommodation_amount else None
+        )
         booking.deposit_amount = quote.deposit_rub
         booking.payload = {
             **booking.payload,

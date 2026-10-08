@@ -107,8 +107,6 @@ class PlacementService:
             flags.append("needs_review:dog_special_condition")
         if pet.vaccinated is False and pet.kind == PetKind.DOG:
             flags.append("needs_review:dog_unvaccinated")
-        if pet.kind == PetKind.DOG and pet.weight_kg is not None and pet.dog_size is None:
-            flags.append("needs_review:weight_category_20_to_25_kg")
         if pet.health_notes:
             flags.append("needs_review:health_notes")
         if pet.behavior_notes and pet.behavior_notes.strip().lower() not in {"нет", "нет особенностей", "-"}:
@@ -156,6 +154,9 @@ class PlacementService:
         requires_review = False
         if unit.tariff_kind == "vip":
             warnings.append("ordinary_vip_price_unconfirmed")
+            requires_review = True
+        if unit.tariff_unconfirmed:
+            warnings.append("room_tariff_unconfirmed")
             requires_review = True
 
         score, reasons = self._score(pet, unit)

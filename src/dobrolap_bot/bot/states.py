@@ -22,6 +22,7 @@ class BookingForm(StatesGroup):
     choose_unit = State()
     feeding = State()
     services = State()
+    taxi_address = State()
     promo = State()
     confirm_submit = State()
     waiting_receipt = State()

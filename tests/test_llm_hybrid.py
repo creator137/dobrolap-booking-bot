@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dobrolap_bot.bot.handlers import set_pet_age, set_behavior_text, set_health
+from dobrolap_bot.bot.handlers import set_pet_age, set_behavior_text, set_health, set_taxi_address
 from dobrolap_bot.bot.states import BookingForm
 from dobrolap_bot.integrations.llm import (
     DisabledLlmAdapter, LlmUnavailableError, OpenAiLlmAdapter, PetSignals,
@@ -102,3 +102,13 @@ async def test_api_failure_falls_back():
     adapter = OpenAiLlmAdapter(api_key="test", model="test-model", client=client)
     with pytest.raises(LlmUnavailableError):
         await adapter.extract_pet_signals("1 год", field="age")
+
+
+@pytest.mark.asyncio
+async def test_taxi_address_is_saved_for_operator_quote():
+    state = FakeState()
+    message = FakeMessage("Люберцы, улица Примерная, дом 10")
+    await set_taxi_address(message, state)
+    assert state.data["taxi_address"] == message.text
+    assert state.current == BookingForm.promo
+    assert "оператору" in message.answers[0][0]

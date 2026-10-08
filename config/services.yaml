@@ -1,5 +1,5 @@
-# Additional services from «Услуги Добролап.xlsx».
-# Range prices are provisional and require owner confirmation.
+# Reference prices from «Услуги Добролап.xlsx».
+# The owner sets the actual amount; the bot records selections and never quotes these prices.
 
 services:
   - id: hygiene_complex_dog

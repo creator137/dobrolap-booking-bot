@@ -245,10 +245,15 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
             f"Питание: {feeding_label(booking.payload.get('feeding'))}",
             f"Дополнительные услуги: {_services_text(list(booking.payload.get('service_ids') or []), catalog)}",
             f"Промокод: {booking.payload.get('promo_code') or 'Нет'}",
-            f"Предварительная стоимость: {format_money(booking.price_total)}",
+            f"Предварительная стоимость: {format_money(booking.price_total) if booking.price_total is not None else 'рассчитает оператор'}",
             f"Залог: {format_money(booking.deposit_amount)}",
         ]
     )
+    taxi_address = (booking.payload.get("service_details") or {}).get("taxi_address")
+    if taxi_address:
+        lines.append(f"Адрес для зоотакси: {taxi_address}")
+    if booking.payload.get("service_ids"):
+        lines.append("Стоимость дополнительных услуг определит оператор.")
     if booking.payload.get("quote_provisional"):
         lines.append("⚠️ В расчёте есть ориентировочные суммы — проверьте их перед подтверждением.")
 
@@ -313,16 +318,19 @@ def format_draft_summary(
             f"Промокод: {data.get('promo_code') or 'Нет'}",
         ]
     )
+    if "zoo_taxi" in set(data.get("service_ids") or []) and data.get("taxi_address"):
+        lines.append(f"Адрес для зоотакси: {data['taxi_address']}")
     if quote:
-        lines.extend(
-            [
-                f"Предварительная стоимость: {format_money(quote.total_rub)}",
-                f"Залог: {format_money(quote.deposit_rub)}",
-            ]
-        )
+        if quote.has_accommodation_amount:
+            lines.append(f"Предварительная стоимость: {format_money(quote.total_rub)}")
+        else:
+            lines.append("Стоимость проживания сообщит оператор после уточнения условий.")
+        lines.append(f"Залог: {format_money(quote.deposit_rub)}")
         if quote.provisional:
             lines.append("⚠️ В расчёте есть ориентировочные суммы. Итог подтвердит владелец.")
     else:
         lines.append(f"Залог: {format_money(data.get('deposit_amount'))}")
         lines.append("Стоимость проживания сообщит владелец после подбора помещения.")
+    if data.get("service_ids"):
+        lines.append("Стоимость дополнительных услуг сообщит оператор отдельно.")
     return "\n".join(lines)

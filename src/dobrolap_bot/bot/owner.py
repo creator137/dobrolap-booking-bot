@@ -416,7 +416,10 @@ async def owner_alt_start(
                 promo_at=date.fromisoformat(booking.payload["promo_at"])
                 if booking.payload.get("promo_at") else None,
             )
-            price = f" — {quote.total_rub:,} ₽".replace(",", " ")
+            price = (
+                f" — {quote.total_rub:,} ₽".replace(",", " ")
+                if quote.has_accommodation_amount else " — расчёт оператора"
+            )
         except Exception:
             logger.exception(
                 "owner alternative quote failed booking=%s unit=%s", booking_id, unit.id
@@ -487,13 +490,13 @@ async def owner_alt_finish(
     client_id = booking.customer_telegram_id
     unit = catalog.get_accommodation(unit_id)
     if client_id and callback.bot and unit:
-        total = f"{quote.total_rub:,}".replace(",", " ")
+        total = f"{quote.total_rub:,}".replace(",", " ") if quote.has_accommodation_amount else "рассчитает оператор"
         deposit = f"{quote.deposit_rub:,}".replace(",", " ")
         await callback.bot.send_message(
             client_id,
             "Владелец предложил другой вариант размещения:\n"
             f"{unit.name}\n"
-            f"Предварительная стоимость: {total} ₽\n"
+            f"Предварительная стоимость: {total}{' ₽' if quote.has_accommodation_amount else ''}\n"
             f"Залог: {deposit} ₽\n"
             "Ожидайте подтверждения или ответьте на вопрос, если он придёт.",
         )

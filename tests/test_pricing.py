@@ -94,7 +94,7 @@ def test_promo_discount_when_rule_active(pricing, catalog):
         rule.active = False
 
 
-def test_med_care_per_day(pricing, catalog):
+def test_extra_service_price_is_set_by_operator(pricing, catalog):
     unit = catalog.get_accommodation("comfort")
     pet = PetProfile(kind=PetKind.DOG, name="Биби", weight_kg=6)
     q = pricing.quote(
@@ -104,8 +104,10 @@ def test_med_care_per_day(pricing, catalog):
         date_to=date(2026, 10, 13),
         service_ids=["med_care"],
     )
-    # med_care from 200 × 3 nights + 1900×3
-    assert q.total_rub == 1900 * 3 + 200 * 3
+    assert q.total_rub == 1900 * 3
+    assert q.provisional
+    service_line = next(line for line in q.lines if line.scope == PriceScope.SERVICE)
+    assert service_line.amount_rub == 0 and service_line.provisional
 
 
 def test_invalid_dates(pricing, catalog):
@@ -150,9 +152,37 @@ def test_spreadsheet_under_one_month_vip_only(pricing, catalog):
                          date_from=start, date_to=end).provisional
 
 
-def test_spreadsheet_weight_gap_is_not_priced_as_large(pricing, catalog):
+def test_owner_confirmed_weight_boundaries(pricing, catalog):
+    assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=9.9).dog_size.value == "miniature"
+    assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=10).dog_size.value == "medium"
+    assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=19.9).dog_size.value == "medium"
+    assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=20).dog_size.value == "large"
     pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=22)
     quote = pricing.quote(pets=[pet], unit=catalog.get_accommodation("comfort"),
                           date_from=date(2026, 10, 10), date_to=date(2026, 10, 11))
-    assert pet.dog_size is None
-    assert quote.provisional and quote.total_rub == 0
+    assert quote.total_rub == 2100
+
+
+def test_group_price_is_left_for_operator_until_promo_cap_is_clarified(pricing, catalog):
+    pets = [
+        PetProfile(kind=PetKind.DOG, name="A", weight_kg=6),
+        PetProfile(kind=PetKind.DOG, name="B", weight_kg=6),
+        PetProfile(kind=PetKind.DOG, name="C", weight_kg=6),
+    ]
+    quote = pricing.quote(
+        pets=pets, unit=catalog.get_accommodation("comfort"),
+        date_from=date(2026, 10, 10), date_to=date(2026, 10, 12),
+    )
+    assert quote.total_rub == 0 and quote.provisional
+    assert all(line.amount_rub == 0 for line in quote.lines if line.scope == PriceScope.ACCOMMODATION)
+    assert "50%" in quote.explanation
+
+
+def test_separate_kitchen_room_has_no_unconfirmed_home_rate(pricing, catalog):
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6)
+    quote = pricing.quote(
+        pets=[pet], unit=catalog.get_accommodation("house_kitchen"),
+        date_from=date(2026, 10, 10), date_to=date(2026, 10, 11),
+    )
+    assert quote.total_rub == 0 and quote.provisional
+    assert not quote.has_accommodation_amount

@@ -6,6 +6,7 @@ deposit:
 
 price_rules:
   - id: dobrolapki_first_stay_2026
+    # Earlier owner instruction; stacking needs reconciliation with the new flyer.
     scope: discount
     date_to: 2026-11-01
     condition:

@@ -126,7 +126,8 @@ async def cmd_start(message: Message, state: FSMContext, llm: LlmAdapter) -> Non
         "Здравствуйте! Я бот зоогостиницы «Добролап».\n\n"
         "Помогу заполнить анкету, подобрать свободное место и посчитать "
         "предварительную стоимость. Бронь подтверждает владелец вручную.\n\n"
-        "Для продолжения нужно согласие на обработку данных питомца и ваших контактов."
+        "Для продолжения нужно согласие на обработку данных питомца, контактных данных "
+        "и адреса подачи, если вы закажете зоотакси."
         + llm_notice,
         reply_markup=consent_kb(),
     )
@@ -873,11 +874,12 @@ async def _run_placement(
             feeding=FeedingOption.OWNER_FOOD,
         )
         day_hint = quote.total_rub // nights if nights else quote.total_rub
-        caption = (
-            f"{i}. {acc.name}\n"
-            f"≈ {day_hint} ₽/сут., предварительно за {nights} сут.: {quote.total_rub} ₽\n"
-            f"Залог: {quote.deposit_rub} ₽"
+        price_text = (
+            f"≈ {day_hint} ₽/сут., предварительно за {nights} сут.: {quote.total_rub} ₽"
+            if quote.has_accommodation_amount
+            else "Стоимость подтвердит оператор после уточнения условий"
         )
+        caption = f"{i}. {acc.name}\n{price_text}\nЗалог: {quote.deposit_rub} ₽"
         if cand.reasons:
             caption += "\nПочему подходит: " + "; ".join(
                 placement_reason_label(reason) for reason in cand.reasons[:2]
@@ -887,7 +889,7 @@ async def _run_placement(
         if acc.photo_paths_by_species and len(acc.calendar_labels()) > 1:
             caption += "\nФото показывает тип размещения; конкретный бокс подтвердит владелец."
 
-        choices.append((acc.id, f"{i}. {acc.name} — {quote.total_rub} ₽"))
+        choices.append((acc.id, f"{i}. {acc.name} — {quote.total_rub} ₽" if quote.has_accommodation_amount else f"{i}. {acc.name} — расчёт оператора"))
 
         photos = []
         for path_str in acc.photos_for(pets, sheet_label=label)[:5]:
@@ -968,7 +970,8 @@ async def set_feeding(message: Message, state: FSMContext, catalog: Catalog) -> 
         )
         return
     await message.answer(
-        "Дополнительные услуги (можно несколько). Нажмите «Готово», когда закончите.",
+        "Дополнительные услуги (можно несколько). Стоимость каждой услуги оператор сообщит отдельно. "
+        "Если выберете зоотакси, попрошу адрес для расчёта поездки. Нажмите «Готово», когда закончите.",
         reply_markup=services_kb(items),
     )
 
@@ -985,15 +988,17 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
     if action in {"none", "done"}:
         if action == "none":
             await state.update_data(service_ids=[])
-        await state.set_state(BookingForm.promo)
+            selected.clear()
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
-        await callback.message.answer(
-            "Есть промокод? Пришлите его или нажмите «Нет».",
-            reply_markup=no_kb(),
-        )
+        if "zoo_taxi" in selected:
+            await state.set_state(BookingForm.taxi_address)
+            await callback.message.answer("Укажите адрес, откуда забрать питомца для зоотакси:")
+        else:
+            await state.set_state(BookingForm.promo)
+            await callback.message.answer("Есть промокод? Пришлите его или нажмите «Нет».", reply_markup=no_kb())
         await callback.answer()
         return
 
@@ -1008,6 +1013,17 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
     items = [(s.id, s.name, s.id in selected) for s in available]
     await callback.message.edit_reply_markup(reply_markup=services_kb(items))
     await callback.answer()
+
+
+@router.message(BookingForm.taxi_address)
+async def set_taxi_address(message: Message, state: FSMContext) -> None:
+    address = (message.text or "").strip()
+    if len(address) < 5:
+        await message.answer("Напишите адрес подробнее, чтобы оператор мог рассчитать поездку.")
+        return
+    await state.update_data(taxi_address=address)
+    await state.set_state(BookingForm.promo)
+    await message.answer("Адрес передам оператору для расчёта зоотакси. Есть промокод? Пришлите его или нажмите «Нет».", reply_markup=no_kb())
 
 
 @router.message(BookingForm.promo)
@@ -1067,7 +1083,9 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
                 promo_eligible=bool(data.get("promo_verified")),
             )
             await state.update_data(
-                price_total=quote.total_rub,
+                price_total=(
+                    quote.total_rub if quote.has_accommodation_amount else None
+                ),
                 deposit_amount=quote.deposit_rub,
                 quote_explanation=quote.explanation,
                 quote_provisional=quote.provisional,
@@ -1115,6 +1133,7 @@ async def submit_yes(
             promo_code=data.get("promo_code"),
             customer_contact=data.get("customer_contact"),
             requested_sheet_label=data.get("requested_sheet_label"),
+            service_details={"taxi_address": data.get("taxi_address")} if data.get("taxi_address") else {},
         )
     except SheetsUnavailableError:
         logger.exception("booking submit failed: Sheets unavailable")

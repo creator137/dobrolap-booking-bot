@@ -105,7 +105,7 @@ def test_multi_pet_flags_manual(placement):
     assert result.requires_manual_matching
 
 
-def test_under_one_month_only_vip_and_weight_gap_needs_manual(placement):
+def test_under_one_month_vip_and_owner_confirmed_large_weight_boundary(placement):
     puppy = PetProfile(kind=PetKind.DOG, name="Щенок", age_months=0,
                        is_puppy_or_kitten=True, weight_kg=5,
                        vaccinated=True, parasite_treated=True)
@@ -113,10 +113,10 @@ def test_under_one_month_only_vip_and_weight_gap_needs_manual(placement):
     assert result.candidates
     assert all(c.accommodation.tariff_kind == "vip_plus" for c in result.candidates)
 
-    gap = puppy.model_copy(update={"age_months": 4, "weight_kg": 22})
-    result = placement.suggest([gap])
-    assert result.requires_manual_matching and not result.candidates
-    assert "needs_review:weight_category_20_to_25_kg" in result.owner_flags
+    large = puppy.model_copy(update={"age_months": 48, "is_puppy_or_kitten": False, "weight_kg": 22})
+    result = placement.suggest([large])
+    assert result.candidates
+    assert not any("weight_category_20_to_25_kg" in flag for flag in result.owner_flags)
 
 
 def test_aggressive_dog_only_private_or_vip(placement):

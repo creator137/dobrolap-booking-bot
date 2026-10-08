@@ -53,11 +53,9 @@ class PetProfile(BaseModel):
             return None
         if self.weight_kg < 10:
             return DogSizeClass.MINIATURE
-        if self.weight_kg <= 20:
+        if self.weight_kg < 20:
             return DogSizeClass.MEDIUM
-        if self.weight_kg >= 25:
-            return DogSizeClass.LARGE
-        return None  # the 2026 spreadsheet has no category for 20–25 kg
+        return DogSizeClass.LARGE
 
 
 class Accommodation(BaseModel):
@@ -77,6 +75,7 @@ class Accommodation(BaseModel):
     sheet_unit_ids: list[str] = Field(default_factory=list)
     active: bool = True
     seasonal: bool = False
+    tariff_unconfirmed: bool = False
     notes: str | None = None
 
     def calendar_labels(self) -> list[str]:
@@ -161,6 +160,13 @@ class PriceQuote(BaseModel):
     deposit_rub: int
     explanation: str
     provisional: bool = False
+
+    @property
+    def has_accommodation_amount(self) -> bool:
+        return any(
+            line.scope == PriceScope.ACCOMMODATION and line.amount_rub > 0
+            for line in self.lines
+        )
 
 
 class PlacementCandidate(BaseModel):
