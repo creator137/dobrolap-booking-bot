@@ -1,6 +1,6 @@
 from datetime import date
 
-from dobrolap_bot.bot.helpers import is_young, normalize_phone, parse_age_months, parse_dates, parse_yes
+from dobrolap_bot.bot.helpers import is_young, normalize_phone, parse_age_months, parse_dates, parse_time, parse_yes
 from dobrolap_bot.domain.enums import PetKind
 
 
@@ -15,6 +15,14 @@ def test_yes_helper():
     assert parse_yes("Да") is True
     assert parse_yes("нет") is False
     assert parse_yes("maybe") is None
+
+
+def test_parse_arrival_time():
+    assert parse_time("19:30").strftime("%H:%M") == "19:30"
+    assert parse_time("8").strftime("%H:%M") == "08:00"
+    assert parse_time("21.00").strftime("%H:%M") == "21:00"
+    assert parse_time("24:00") is None
+    assert parse_time("вечером") is None
 
 
 def test_normalize_phone():

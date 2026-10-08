@@ -42,16 +42,13 @@ class PricingService:
         provisional = False
         notes: list[str] = []
 
-        # The group discount is known, but its interaction with the promotional
-        # discount cap is unresolved. Avoid showing a misleading final total.
         if len(pets) > 1:
-            provisional = True
             notes.append(
-                "Совместное размещение: заявлена скидка 50% на второго и каждого следующего питомца; "
-                "итог подтвердит оператор с учётом правил суммирования акций."
+                "Совместное размещение: скидка 50% на проживание второго и каждого следующего питомца."
             )
 
-        for pet in pets:
+        shared_pet_discount = 0
+        for pet_index, pet in enumerate(pets):
             if unit.tariff_unconfirmed:
                 provisional = True
                 lines.append(
@@ -60,17 +57,6 @@ class PricingService:
                         label=f"Проживание: {unit.name} / {pet.name}",
                         amount_rub=0,
                         detail="Тариф этого помещения не подтверждён владельцем",
-                        provisional=True,
-                    )
-                )
-                continue
-            if len(pets) > 1:
-                lines.append(
-                    QuoteLine(
-                        scope=PriceScope.ACCOMMODATION,
-                        label=f"Проживание: {unit.name} / {pet.name}",
-                        amount_rub=0,
-                        detail="Сумму для совместного размещения рассчитает оператор",
                         provisional=True,
                     )
                 )
@@ -104,6 +90,17 @@ class PricingService:
                     provisional=day_provisional or unit.tariff_kind == "vip",
                 )
             )
+            if pet_index > 0:
+                discount = int(amount * 0.5)
+                shared_pet_discount -= discount
+                lines.append(
+                    QuoteLine(
+                        scope=PriceScope.DISCOUNT,
+                        label=f"Скидка 50% на размещение питомца: {pet.name}",
+                        amount_rub=-discount,
+                        detail="Скидка на второго и каждого следующего питомца; лимит акции за отзывы к ней не относится",
+                    )
+                )
 
         # Feeding
         if feeding == FeedingOption.NATURAL_COOKED:
@@ -162,7 +159,7 @@ class PricingService:
 
         accommodation_subtotal = sum(
             ln.amount_rub for ln in lines if ln.scope == PriceScope.ACCOMMODATION
-        )
+        ) + shared_pet_discount
 
         # Promo / discounts (active rules only)
         discount_lines = self._apply_discounts(

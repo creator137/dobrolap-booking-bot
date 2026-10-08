@@ -25,6 +25,7 @@ def test_catalog_loads(catalog):
     assert len(catalog.accommodations) >= 10
     assert len(catalog.daily_rates) >= 20
     assert catalog.deposit_base_rub == 2000
+    assert not catalog.get_accommodation("home_shared").active
 
 
 def test_miniature_dog_gets_candidates(placement):

@@ -5,6 +5,7 @@ class BookingForm(StatesGroup):
     consent = State()
     contact = State()
     dates = State()
+    arrival_time = State()
     pet_kind = State()
     pet_name = State()
     pet_breed = State()

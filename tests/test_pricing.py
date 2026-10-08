@@ -154,7 +154,8 @@ def test_spreadsheet_under_one_month_vip_only(pricing, catalog):
 
 def test_owner_confirmed_weight_boundaries(pricing, catalog):
     assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=9.9).dog_size.value == "miniature"
-    assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=10).dog_size.value == "medium"
+    assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=10).dog_size.value == "miniature"
+    assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=10.1).dog_size.value == "medium"
     assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=19.9).dog_size.value == "medium"
     assert PetProfile(kind=PetKind.DOG, name="A", weight_kg=20).dog_size.value == "large"
     pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=22)
@@ -163,7 +164,7 @@ def test_owner_confirmed_weight_boundaries(pricing, catalog):
     assert quote.total_rub == 2100
 
 
-def test_group_price_is_left_for_operator_until_promo_cap_is_clarified(pricing, catalog):
+def test_group_price_applies_confirmed_fifty_percent_discount(pricing, catalog):
     pets = [
         PetProfile(kind=PetKind.DOG, name="A", weight_kg=6),
         PetProfile(kind=PetKind.DOG, name="B", weight_kg=6),
@@ -173,8 +174,9 @@ def test_group_price_is_left_for_operator_until_promo_cap_is_clarified(pricing, 
         pets=pets, unit=catalog.get_accommodation("comfort"),
         date_from=date(2026, 10, 10), date_to=date(2026, 10, 12),
     )
-    assert quote.total_rub == 0 and quote.provisional
-    assert all(line.amount_rub == 0 for line in quote.lines if line.scope == PriceScope.ACCOMMODATION)
+    assert quote.total_rub == 7600 and not quote.provisional
+    discounts = [line for line in quote.lines if line.scope == PriceScope.DISCOUNT]
+    assert [line.amount_rub for line in discounts] == [-1900, -1900]
     assert "50%" in quote.explanation
 
 

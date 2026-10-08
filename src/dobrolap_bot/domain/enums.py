@@ -31,7 +31,7 @@ class DogSizeClass(StrEnum):
     XLSX says large dogs start at 25 kg — that conflict is unresolved.
     """
 
-    MINIATURE = "miniature"  # < 10 kg
+    MINIATURE = "miniature"  # <= 10 kg
     MEDIUM = "medium"  # 10–20 kg
     LARGE = "large"  # >= 20 kg
 

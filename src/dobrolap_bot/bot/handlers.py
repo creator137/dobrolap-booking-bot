@@ -28,6 +28,7 @@ from dobrolap_bot.bot.helpers import (
     normalize_phone,
     parse_age_months,
     parse_dates,
+    parse_time,
     parse_yes,
 )
 from dobrolap_bot.bot.keyboards import (
@@ -62,6 +63,11 @@ from dobrolap_bot.integrations.google_sheets import SheetsGateway, SheetsUnavail
 from dobrolap_bot.services.booking import BookingService
 from dobrolap_bot.services.placement import PlacementService
 from dobrolap_bot.services.pricing import PricingService
+from dobrolap_bot.services.arrival import (
+    ARRIVAL_RULES_TEXT,
+    arrival_price_notice,
+    arrival_requires_price_review,
+)
 from dobrolap_bot.integrations.llm import DisabledLlmAdapter, LlmAdapter, LlmUnavailableError
 from dobrolap_bot.bot.presentation import BEHAVIOR_LABELS, format_age
 from dobrolap_bot.services.summary import format_client_status, format_owner_summary
@@ -217,9 +223,33 @@ async def _finish_dates(message: Message, state: FSMContext, date_from: date, da
         date_to=date_to.isoformat(),
         cal_pick_from=None,
     )
-    await state.set_state(BookingForm.pet_kind)
+    await state.set_state(BookingForm.arrival_time)
     await message.answer(
         f"Даты: {date_from.strftime('%d.%m.%Y')} → {date_to.strftime('%d.%m.%Y')}\n"
+        "Во сколько планируете приехать? Напишите время, например: 19:30.\n\n"
+        + ARRIVAL_RULES_TEXT,
+    )
+
+
+@router.message(BookingForm.arrival_time)
+async def set_arrival_time(message: Message, state: FSMContext) -> None:
+    arrival = parse_time(message.text or "")
+    if arrival is None:
+        await message.answer("Не разобрал время. Напишите в формате ЧЧ:ММ, например: 19:30.")
+        return
+    data = await state.get_data()
+    flags = set(data.get("placement_flags") or [])
+    if arrival_requires_price_review(arrival):
+        flags.add("arrival_price_review")
+    await state.update_data(
+        arrival_time=arrival.strftime("%H:%M"),
+        arrival_price_notice=arrival_price_notice(arrival),
+        placement_flags=sorted(flags),
+    )
+    await state.set_state(BookingForm.pet_kind)
+    await message.answer(
+        f"Время заезда: {arrival.strftime('%H:%M')}.\n"
+        f"{arrival_price_notice(arrival)}\n\n"
         "Кто ваш питомец?",
         reply_markup=pet_kind_kb(),
     )
@@ -713,7 +743,10 @@ async def _finish_health(message: Message, state: FSMContext, *, health: str | N
     await state.update_data(draft_health=health, draft_behavior=current.model_dump())
     await state.set_state(BookingForm.pet_passport)
     await message.answer(
-        "Пришлите фото страниц ветпаспорта (данные, прививки, обработки).\n"
+        "Пришлите фото страниц ветпаспорта:\n"
+        "• данные питомца и владельца;\n"
+        "• вакцинация, включая бешенство;\n"
+        "• обработки от паразитов.\n"
         "Можно несколько фото. Когда закончите — «Готово».\n"
         "Если фото нет — «Без фото» (заявка уйдёт владельцу как неполная).",
         reply_markup=passport_kb(),
@@ -754,7 +787,8 @@ async def passport_done(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip().lower()
     if text not in {"готово", "далее", "ok", "ок", "без фото", "пропустить"}:
         await message.answer(
-            "Пришлите фото паспорта или нажмите «Готово».\n"
+            "Пришлите страницы с данными питомца и владельца, вакцинацией (включая бешенство) "
+            "и обработками от паразитов — или нажмите «Готово».\n"
             "Если фото нет — «Без фото» (заявка уйдёт владельцу как неполная).",
             reply_markup=passport_kb(),
         )
@@ -1133,6 +1167,7 @@ async def submit_yes(
             promo_code=data.get("promo_code"),
             customer_contact=data.get("customer_contact"),
             requested_sheet_label=data.get("requested_sheet_label"),
+            arrival_time=data.get("arrival_time"),
             service_details={"taxi_address": data.get("taxi_address")} if data.get("taxi_address") else {},
         )
     except SheetsUnavailableError:

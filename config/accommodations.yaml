@@ -136,6 +136,8 @@ accommodations:
     allowed_species: [dog, cat]
     weight_max_kg: 10
     features: [shared_space]
+    active: false
+    notes: "Свободное размещение скрыто из бота по решению владельца: условия согласуются вручную"
 
   - id: first_floor_workshop
     name: "Мастерская 1 этажа"
@@ -229,6 +231,7 @@ daily_rates:
   - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 2300}
   - {accommodation_tariff: comfort, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 2000}
   - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 2050}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: miniature, is_young: true, unavailable: true}
   - {accommodation_tariff: standard_m, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 1650}
   - {accommodation_tariff: optimal_s, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 1500}
   - {accommodation_tariff: home, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 1500}

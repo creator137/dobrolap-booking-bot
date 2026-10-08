@@ -51,7 +51,7 @@ class PetProfile(BaseModel):
     def dog_size(self) -> DogSizeClass | None:
         if self.kind != PetKind.DOG or self.weight_kg is None:
             return None
-        if self.weight_kg < 10:
+        if self.weight_kg <= 10:
             return DogSizeClass.MINIATURE
         if self.weight_kg < 20:
             return DogSizeClass.MEDIUM

@@ -65,6 +65,7 @@ PLACEMENT_FLAG_LABELS = {
     "needs_review:health_notes": "указаны особенности здоровья",
     "needs_review:behavior_notes": "поведение описано свободным текстом — проверьте исходное описание",
     "sheets_unavailable": "календарь Google Sheets был недоступен — свободное место не проверено",
+    "arrival_price_review": "время заезда требует ручного расчёта доплаты",
 }
 
 PLACEMENT_REASON_LABELS = {
@@ -228,6 +229,7 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
         f"Телефон: {contact or 'Не указан'}",
         f"Telegram: {telegram}",
         f"Даты: {format_date(booking.date_from)} — {format_date(booking.date_to)}",
+        f"Время заезда: {booking.payload.get('arrival_time') or 'Не указано'}",
         "",
         "Питомцы",
     ]
@@ -280,6 +282,7 @@ def format_client_status(booking: BookingRecord, catalog: Catalog) -> str:
         f"Заявка №{booking.id}",
         f"Статус: {status_label(booking.status)}",
         f"Даты: {format_date(booking.date_from)} — {format_date(booking.date_to)}",
+        f"Время заезда: {booking.payload.get('arrival_time') or 'Не указано'}",
         f"Питомцы: {pet_names}",
         f"Размещение: {unit.name if unit else 'подбирает владелец'}",
         f"Питание: {feeding_label(booking.payload.get('feeding'))}",
@@ -304,6 +307,7 @@ def format_draft_summary(
         "Проверьте заявку",
         f"Телефон: {data.get('customer_contact') or 'Не указан'}",
         f"Даты: {format_date(date.fromisoformat(data['date_from']))} — {format_date(date.fromisoformat(data['date_to']))}",
+        f"Время заезда: {data.get('arrival_time') or 'Не указано'}",
         "",
         "Питомцы",
     ]

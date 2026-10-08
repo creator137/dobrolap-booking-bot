@@ -58,6 +58,7 @@ async def test_full_happy_path(booking_service, catalog):
         placement_flags=[],
         manual_matching=False,
         customer_contact="+79001234567",
+        arrival_time="19:30",
     )
     assert booking.status == BookingStatus.WAITING_OWNER
     assert quote is not None
@@ -68,6 +69,8 @@ async def test_full_happy_path(booking_service, catalog):
     stored = await booking_service.get(booking.id)
     assert stored is not None
     assert stored.customer_contact == "+79001234567"
+    assert stored.payload["arrival_time"] == "19:30"
+    assert "Время заезда: 19:30" in owner_card
 
     booking = await booking_service.approve(booking.id)
     assert booking.status == BookingStatus.WAITING_PAYMENT

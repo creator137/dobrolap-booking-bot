@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 import re
 
 from dobrolap_bot.domain.enums import FeedingOption, PetKind
@@ -38,6 +38,18 @@ def parse_dates(text: str) -> tuple[date, date] | None:
     if d2 <= d1:
         return None
     return d1, d2
+
+
+def parse_time(text: str) -> time | None:
+    value = text.strip().replace(".", ":")
+    if re.fullmatch(r"\d{1,2}", value):
+        value += ":00"
+    if not re.fullmatch(r"\d{1,2}:\d{2}", value):
+        return None
+    hours, minutes = (int(part) for part in value.split(":"))
+    if hours > 23 or minutes > 59:
+        return None
+    return time(hours, minutes)
 
 
 def parse_yes(text: str) -> bool | None:

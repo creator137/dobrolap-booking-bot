@@ -196,6 +196,7 @@ class BookingService:
         promo_code: str | None = None,
         customer_contact: str | None = None,
         requested_sheet_label: str | None = None,
+        arrival_time: str | None = None,
         service_details: dict[str, Any] | None = None,
     ) -> tuple[BookingRecord, PriceQuote | None]:
         customer_id = await self.repo.upsert_customer(
@@ -251,6 +252,7 @@ class BookingService:
             "promo_rule_id": promo_rule.id if promo_rule else None,
             "promo_at": promo_at.isoformat() if promo_rule else None,
             "requested_sheet_label": requested_sheet_label,
+            "arrival_time": arrival_time,
             "quote_lines": [ln.model_dump(mode="json") for ln in quote.lines] if quote else [],
             "quote_explanation": quote.explanation if quote else None,
             "quote_provisional": quote.provisional if quote else True,
