@@ -17,6 +17,8 @@ accommodations:
     photo_paths_by_sheet_label:
       "Домик педбанник":
         - assets/rooms/20-house-prebathroom.png
+      "Домик 2 этаж":
+        - assets/rooms/16-house-reserve-vip-plus.jpg
     notes: "Резервная VIP+ в домике (педбанник / 2 этаж)"
 
   - id: seasonal_vip_under_stairs
@@ -125,6 +127,7 @@ accommodations:
     photo_paths_by_sheet_label:
       "Уличный Вольер Комфорт для собак 2":
         - assets/rooms/23-outdoor-enclosure-2.png
+        - assets/rooms/18-unknown-1.jpg
 
   - id: home_shared
     name: "Домашнее размещение"

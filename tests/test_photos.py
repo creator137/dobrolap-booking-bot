@@ -89,6 +89,7 @@ async def test_outdoor_photo_only_when_exact_enclosure_two_is_free():
         await _run_placement(message, state, catalog, sheets, service, ROOT / "assets")
         paths = [str(item.media.path) for group in message.media for item in group]
         assert any("23-outdoor-enclosure-2.png" in path for path in paths) is not occupied_two
+        assert any("18-unknown-1.jpg" in path for path in paths) is not occupied_two
         if not occupied_two:
             assert state.data["offered_sheet_labels"]["outdoor_comfort"] == label_two
 
@@ -105,6 +106,7 @@ async def test_house_photo_only_for_prebathroom_not_other_house_room():
         await _run_placement(message, state, catalog, sheets, service, ROOT / "assets")
         paths = [str(item.media.path) for group in message.media for item in group]
         assert any("20-house-prebathroom.png" in path for path in paths) is not occupied_prebathroom
+        assert any("16-house-reserve-vip-plus.jpg" in path for path in paths) is occupied_prebathroom
 
 
 @pytest.mark.asyncio
@@ -127,4 +129,7 @@ def test_all_catalog_photos_exist_and_uncertain_images_are_not_shown():
         all_paths.extend(path for group in unit.photo_paths_by_species.values() for path in group)
         all_paths.extend(path for group in unit.photo_paths_by_sheet_label.values() for path in group)
     assert all((ROOT / path).is_file() for path in all_paths)
-    assert not any("04-unknown" in path or "18-unknown" in path for path in all_paths)
+    assert not any("04-unknown" in path for path in all_paths)
+    assert catalog.get_accommodation("outdoor_comfort").photo_paths_by_sheet_label[
+        "Уличный Вольер Комфорт для собак 2"
+    ] == ["assets/rooms/23-outdoor-enclosure-2.png", "assets/rooms/18-unknown-1.jpg"]
