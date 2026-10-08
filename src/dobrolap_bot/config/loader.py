@@ -50,6 +50,24 @@ def load_catalog(config_dir: Path) -> Catalog:
     rules_raw = _load_yaml(config_dir / "price_rules.yaml")
 
     accommodations = [Accommodation.model_validate(x) for x in acc_raw.get("accommodations", [])]
+    for unit in accommodations:
+        unknown_labels = set(unit.photo_paths_by_sheet_label) - set(unit.calendar_labels())
+        if unknown_labels:
+            raise ValueError(f"Photo labels for {unit.id} are absent from calendar: {sorted(unknown_labels)}")
+        unknown_species = set(unit.photo_paths_by_species) - set(unit.allowed_species)
+        if unknown_species:
+            raise ValueError(f"Photo species for {unit.id} are not allowed: {sorted(x.value for x in unknown_species)}")
+        paths = [
+            *unit.photo_paths,
+            *(path for group in unit.photo_paths_by_species.values() for path in group),
+            *(path for group in unit.photo_paths_by_sheet_label.values() for path in group),
+        ]
+        for path in paths:
+            resolved = Path(path)
+            if not resolved.is_absolute():
+                resolved = config_dir.parent / resolved
+            if not resolved.is_file():
+                raise FileNotFoundError(f"Photo for {unit.id} is missing: {resolved}")
     daily_rates = [DailyRate.model_validate(x) for x in acc_raw.get("daily_rates", [])]
     services = [ServiceOffering.model_validate(x) for x in svc_raw.get("services", [])]
     price_rules = [PriceRule.model_validate(x) for x in rules_raw.get("price_rules", [])]

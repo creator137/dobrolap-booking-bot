@@ -63,6 +63,7 @@ PLACEMENT_FLAG_LABELS = {
     "needs_review:dog_special_condition": "у собаки есть особенности поведения или здоровья",
     "needs_review:dog_unvaccinated": "у собаки нет действующей вакцинации",
     "needs_review:health_notes": "указаны особенности здоровья",
+    "needs_review:behavior_notes": "поведение описано свободным текстом — проверьте исходное описание",
     "sheets_unavailable": "календарь Google Sheets был недоступен — свободное место не проверено",
 }
 
@@ -192,6 +193,8 @@ def _pet_lines(pet: PetProfile, *, prefix: str = "") -> list[str]:
         )
     features = behavior_labels(pet)
     lines.append(f"{indent}  Поведение: " + (", ".join(features) if features else "особенности не отмечены"))
+    if pet.behavior_notes and pet.behavior_notes.strip().lower() not in {"нет", "нет особенностей", "-"}:
+        lines.append(f"{indent}  Описание поведения: {pet.behavior_notes}")
     lines.append(f"{indent}  Здоровье: {pet.health_notes or 'особенности не указаны'}")
     return lines
 

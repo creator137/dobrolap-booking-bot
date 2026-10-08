@@ -128,6 +128,7 @@ class BookingService:
         date_to: date,
         *,
         exclude_booking_id: str | None = None,
+        preferred_label: str | None = None,
     ) -> str:
         """Pick first free calendar row for catalog unit; raise if pool full."""
         occupied = {
@@ -136,7 +137,19 @@ class BookingService:
                 date_from, date_to, exclude_booking_id=exclude_booking_id
             )
         }
-        for label in self.sheet_labels(unit_id):
+        labels = self.sheet_labels(unit_id)
+        if preferred_label:
+            if preferred_label not in labels:
+                raise ValueError("unknown_sheet_label")
+            labels = [preferred_label]
+        else:
+            acc = self.catalog.get_accommodation(unit_id)
+            if acc and acc.photo_paths_by_sheet_label:
+                labels = sorted(
+                    labels,
+                    key=lambda label: label not in acc.photo_paths_by_sheet_label,
+                )
+        for label in labels:
             if label.strip().lower() not in occupied:
                 return label
         raise ValueError("unit_occupied")
@@ -182,6 +195,7 @@ class BookingService:
         manual_matching: bool,
         promo_code: str | None = None,
         customer_contact: str | None = None,
+        requested_sheet_label: str | None = None,
     ) -> tuple[BookingRecord, PriceQuote | None]:
         customer_id = await self.repo.upsert_customer(
             telegram_user_id=telegram_user_id,
@@ -190,12 +204,27 @@ class BookingService:
             consent_at=consent_at,
         )
 
+        promo_rule = None
+        promo_at = self.pricing.promo_today()
+        if promo_code:
+            promo_rule = self.pricing.find_active_promo(promo_code, on_date=promo_at)
+            if promo_rule is None:
+                raise ValueError("promo_invalid_or_expired")
+            if await self.repo.has_prior_placement_by_telegram(telegram_user_id, customer_contact):
+                raise ValueError("promo_not_first_placement")
+
         quote: PriceQuote | None = None
         unit = self.catalog.get_accommodation(unit_id) if unit_id else None
         if unit is not None and unit_id is not None:
-            occupied = self.occupied_catalog_ids(date_from, date_to)
-            if unit_id in occupied:
-                raise ValueError("selected_unit_occupied")
+            try:
+                self.resolve_free_sheet_label(
+                    unit_id, date_from, date_to,
+                    preferred_label=requested_sheet_label,
+                )
+            except ValueError as exc:
+                if str(exc) == "unit_occupied":
+                    raise ValueError("selected_unit_occupied") from exc
+                raise
             quote = self.pricing.quote(
                 pets=pets,
                 unit=unit,
@@ -204,6 +233,8 @@ class BookingService:
                 feeding=feeding,
                 service_ids=service_ids,
                 promo_code=promo_code,
+                promo_eligible=promo_rule is not None,
+                promo_at=promo_at,
             )
 
         now = _utcnow()
@@ -215,6 +246,9 @@ class BookingService:
             "placement_flags": placement_flags,
             "manual_matching": manual_matching,
             "promo_code": promo_code,
+            "promo_rule_id": promo_rule.id if promo_rule else None,
+            "promo_at": promo_at.isoformat() if promo_rule else None,
+            "requested_sheet_label": requested_sheet_label,
             "quote_lines": [ln.model_dump(mode="json") for ln in quote.lines] if quote else [],
             "quote_explanation": quote.explanation if quote else None,
             "quote_provisional": quote.provisional if quote else True,
@@ -244,7 +278,11 @@ class BookingService:
             customer_telegram_id=telegram_user_id,
             customer_name=customer_name or username,
         )
-        await self.repo.save_booking(record)
+        if promo_rule and promo_rule.condition.get("first_placement"):
+            if not await self.repo.save_first_placement_booking(record):
+                raise ValueError("promo_not_first_placement")
+        else:
+            await self.repo.save_booking(record)
         return record, quote
 
     async def get(self, booking_id: str) -> BookingRecord | None:
@@ -313,6 +351,7 @@ class BookingService:
                 booking.date_from,
                 booking.date_to,
                 exclude_booking_id=booking.id,
+                preferred_label=booking.payload.get("requested_sheet_label"),
             )
             self.sheets.reserve_booking(
                 booking_id=booking.id,
@@ -550,6 +589,9 @@ class BookingService:
             feeding=feeding,
             service_ids=service_ids,
             promo_code=booking.payload.get("promo_code"),
+            promo_eligible=bool(booking.payload.get("promo_rule_id")),
+            promo_at=date.fromisoformat(booking.payload["promo_at"])
+            if booking.payload.get("promo_at") else None,
         )
         held = booking.payload.get("sheet_label")
         if held:
@@ -566,6 +608,7 @@ class BookingService:
             "suggested_by_owner": True,
             "manual_matching": False,
             "sheet_label": None,
+            "requested_sheet_label": None,
             "receipt_file_ids": [],
         }
         booking.updated_at = _utcnow()
@@ -619,6 +662,7 @@ class BookingService:
             date_to=booking.date_to,
             status=BookingStatus.CONFIRMED.value,
         )
+        booking.payload = {**booking.payload, "ever_confirmed": True}
         return await self._set_status(
             booking,
             BookingStatus.CONFIRMED,

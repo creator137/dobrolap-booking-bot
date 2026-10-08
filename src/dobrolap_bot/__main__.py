@@ -11,6 +11,7 @@ from dobrolap_bot.bot.owner import router as owner_router
 from dobrolap_bot.config.loader import load_catalog
 from dobrolap_bot.config.settings import get_settings
 from dobrolap_bot.integrations.factory import build_sheets_gateway
+from dobrolap_bot.integrations.llm import build_llm_adapter
 from dobrolap_bot.repositories.fsm_sqlite import SqliteFsmStorage
 from dobrolap_bot.repositories.sqlite import SqliteRepository
 from dobrolap_bot.services.booking import BookingService
@@ -58,6 +59,11 @@ async def run_bot() -> None:
     dp["payment_instructions"] = settings.payment_instructions
     dp["booking_service"] = booking_service
     dp["assets_dir"] = assets_dir
+    dp["llm"] = build_llm_adapter(
+        enabled=settings.llm_enabled,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+    )
     dp.include_router(owner_router)
     dp.include_router(client_router)
 

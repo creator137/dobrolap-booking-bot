@@ -109,6 +109,8 @@ class PlacementService:
             flags.append("needs_review:dog_unvaccinated")
         if pet.health_notes:
             flags.append("needs_review:health_notes")
+        if pet.behavior_notes and pet.behavior_notes.strip().lower() not in {"нет", "нет особенностей", "-"}:
+            flags.append("needs_review:behavior_notes")
         return flags
 
     def _candidates_for_pet(
@@ -262,12 +264,7 @@ class PlacementService:
             and (pet.kind != PetKind.DOG or r.size_class == size)
         ]
         if not matches:
-            any_kind = [
-                r
-                for r in self.catalog.daily_rates
-                if r.accommodation_tariff == tariff_kind and r.pet_kind == pet.kind
-            ]
-            return bool(any_kind) and not all(r.unavailable for r in any_kind)
+            return False
 
         return not all(r.unavailable for r in matches)
 

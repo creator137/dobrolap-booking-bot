@@ -88,10 +88,9 @@ def feeding_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def behavior_kb(kind: PetKind, selected: set[str] | None = None) -> InlineKeyboardMarkup:
-    selected = selected or set()
+def behavior_options(kind: PetKind) -> list[str]:
     if kind == PetKind.CAT:
-        keys = [
+        return [
             "zoo_aggression",
             "high_stress",
             "distrust_humans",
@@ -102,7 +101,7 @@ def behavior_kb(kind: PetKind, selected: set[str] | None = None) -> InlineKeyboa
             "disability",
         ]
     else:
-        keys = [
+        return [
             "aggression",
             "high_stress",
             "loud_barking",
@@ -112,6 +111,11 @@ def behavior_kb(kind: PetKind, selected: set[str] | None = None) -> InlineKeyboa
             "needs_treatment",
             "disability",
         ]
+
+
+def behavior_kb(kind: PetKind, selected: set[str] | None = None) -> InlineKeyboardMarkup:
+    selected = selected or set()
+    keys = behavior_options(kind)
     rows = [
         [
             InlineKeyboardButton(
@@ -128,6 +132,15 @@ def behavior_kb(kind: PetKind, selected: set[str] | None = None) -> InlineKeyboa
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def extraction_review_kb(field: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Верно", callback_data=f"review:{field}:yes")],
+            [InlineKeyboardButton(text="✏️ Исправить", callback_data=f"review:{field}:edit")],
+        ]
+    )
 
 
 def unit_choice_kb(unit_ids: list[tuple[str, str]]) -> InlineKeyboardMarkup:

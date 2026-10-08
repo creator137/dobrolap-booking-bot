@@ -5,6 +5,20 @@ deposit:
   extra_pet_rub: 500
 
 price_rules:
+  - id: dobrolapki_first_stay_2026
+    scope: discount
+    date_to: 2026-11-01
+    condition:
+      promo_code: "ДОБРОЛАПКИ"
+      applies_to: accommodation
+      first_placement: true
+      max_uses_per_customer: 1
+    percent: 5
+    priority: 1
+    stackable: false
+    active: true
+    description: "ДОБРОЛАПКИ: 5% на первое размещение, до 01.11.2026 включительно"
+
   - id: promo_5pct_2026
     scope: discount
     date_from: 2026-01-01

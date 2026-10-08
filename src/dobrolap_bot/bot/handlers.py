@@ -33,8 +33,10 @@ from dobrolap_bot.bot.helpers import (
 from dobrolap_bot.bot.keyboards import (
     add_pet_kb,
     behavior_kb,
+    behavior_options,
     consent_kb,
     contact_kb,
+    extraction_review_kb,
     feeding_kb,
     no_kb,
     owner_actions_kb,
@@ -60,6 +62,8 @@ from dobrolap_bot.integrations.google_sheets import SheetsGateway, SheetsUnavail
 from dobrolap_bot.services.booking import BookingService
 from dobrolap_bot.services.placement import PlacementService
 from dobrolap_bot.services.pricing import PricingService
+from dobrolap_bot.integrations.llm import DisabledLlmAdapter, LlmAdapter, LlmUnavailableError
+from dobrolap_bot.bot.presentation import BEHAVIOR_LABELS, format_age
 from dobrolap_bot.services.summary import format_client_status, format_owner_summary
 
 router = Router(name="client")
@@ -98,7 +102,7 @@ def _resolve_photo(path_str: str, assets_dir: Path) -> Path | None:
         cand = Path.cwd() / p
         if cand.exists():
             return cand
-        cand = assets_dir / p.name
+        cand = assets_dir / "rooms" / p.name
         if cand.exists():
             return cand
         # strip leading assets/
@@ -110,14 +114,20 @@ def _resolve_photo(path_str: str, assets_dir: Path) -> Path | None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, llm: LlmAdapter) -> None:
     await state.clear()
     await state.set_state(BookingForm.consent)
+    llm_notice = (
+        "\nСвободный текст о возрасте, поведении и здоровье будет передан сервису OpenAI "
+        "для распознавания; результат можно проверить и исправить."
+        if not isinstance(llm, DisabledLlmAdapter) else ""
+    )
     await message.answer(
         "Здравствуйте! Я бот зоогостиницы «Добролап».\n\n"
         "Помогу заполнить анкету, подобрать свободное место и посчитать "
         "предварительную стоимость. Бронь подтверждает владелец вручную.\n\n"
-        "Для продолжения нужно согласие на обработку данных питомца и ваших контактов.",
+        "Для продолжения нужно согласие на обработку данных питомца и ваших контактов."
+        + llm_notice,
         reply_markup=consent_kb(),
     )
 
@@ -438,6 +448,7 @@ async def _store_current_pet(
         vaccinated=data.get("draft_vaccinated"),
         parasite_treated=data.get("draft_parasite"),
         behavior=BehaviorFlags.model_validate(data.get("draft_behavior") or {}),
+        behavior_notes=data.get("draft_behavior_raw"),
         health_notes=data.get("draft_health"),
         passport_file_ids=list(passport_ids or []),
     )
@@ -477,20 +488,53 @@ async def set_pet_breed(message: Message, state: FSMContext) -> None:
 
 
 @router.message(BookingForm.pet_age)
-async def set_pet_age(message: Message, state: FSMContext) -> None:
-    age = parse_age_months(message.text or "")
+async def set_pet_age(message: Message, state: FSMContext, llm: LlmAdapter) -> None:
+    raw = (message.text or "").strip()
+    age = None
+    try:
+        signals = await llm.extract_pet_signals(raw, field="age")
+        if not signals.needs_clarification:
+            age = signals.age_months
+    except LlmUnavailableError:
+        age = parse_age_months(raw)
     if age is None:
-        await message.answer("Не удалось понять возраст. Напишите, например: «2 года» или «8 месяцев».")
+        await message.answer(
+            "Не удалось однозначно понять возраст. Напишите, например: «2 года 3 месяца» "
+            "или точное число месяцев."
+        )
         return
-    await state.update_data(draft_age_months=age)
+    await state.update_data(draft_age_candidate=age)
+    await state.set_state(BookingForm.pet_age_review)
+    await message.answer(
+        f"Возраст: {format_age(age)}. Верно?",
+        reply_markup=extraction_review_kb("age"),
+    )
+
+
+@router.callback_query(BookingForm.pet_age_review, F.data.startswith("review:age:"))
+async def review_pet_age(callback: CallbackQuery, state: FSMContext) -> None:
+    action = (callback.data or "").split(":")[-1]
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    if action != "yes":
+        await state.set_state(BookingForm.pet_age)
+        await callback.message.answer("Напишите точный возраст ещё раз, например «18 месяцев».")
+        return
+    data = await state.get_data()
+    age = data.get("draft_age_candidate")
+    if age is None:
+        await state.set_state(BookingForm.pet_age)
+        await callback.message.answer("Напишите возраст ещё раз.")
+        return
+    await state.update_data(draft_age_months=age, draft_age_candidate=None)
     data = await state.get_data()
     if data.get("draft_kind") == PetKind.DOG.value:
         await state.set_state(BookingForm.pet_weight)
-        await message.answer("Вес собаки в кг (число)?")
+        await callback.message.answer("Вес собаки в кг (число)?")
     else:
         await state.update_data(draft_weight=None)
         await state.set_state(BookingForm.pet_vaccinated)
-        await message.answer("Есть действующая вакцинация?", reply_markup=yes_no_kb())
+        await callback.message.answer("Есть действующая вакцинация?", reply_markup=yes_no_kb())
 
 
 @router.message(BookingForm.pet_weight)
@@ -530,8 +574,8 @@ async def set_parasite(message: Message, state: FSMContext) -> None:
     kind = PetKind(data["draft_kind"])
     await state.update_data(draft_behavior_selected=[])
     await message.answer(
-        "Отметьте важные особенности поведения и ухода. Можно выбрать несколько пунктов.\n"
-        "Если ничего из списка нет, нажмите «Особенностей нет».",
+        "Расскажите обычным текстом об особенностях поведения и ухода — например, «боится людей, но не агрессивен». "
+        "Можно также выбрать несколько пунктов кнопками. Если особенностей нет, нажмите «Особенностей нет».",
         reply_markup=behavior_kb(kind),
     )
 
@@ -544,7 +588,7 @@ async def _finish_behavior(message: Message, state: FSMContext) -> None:
     await state.set_state(BookingForm.pet_health)
     await message.answer(
         "Есть дополнительные сведения о здоровье, лекарствах или уходе?\n"
-        "Напишите их одним сообщением или нажмите «Нет».",
+        "Можно написать обычным текстом или нажать «Нет».",
         reply_markup=no_kb(),
     )
 
@@ -567,7 +611,7 @@ async def toggle_behavior(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         await _finish_behavior(callback.message, state)
         return
-    allowed = set(BehaviorFlags.model_fields)
+    allowed = set(behavior_options(kind))
     if action not in allowed:
         await callback.answer("Неизвестный вариант", show_alert=True)
         return
@@ -581,39 +625,113 @@ async def toggle_behavior(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(BookingForm.pet_behavior)
-async def behavior_requires_buttons(message: Message, state: FSMContext) -> None:
+async def set_behavior_text(message: Message, state: FSMContext, llm: LlmAdapter) -> None:
+    raw = (message.text or "").strip()
     data = await state.get_data()
     kind = PetKind(data["draft_kind"])
-    selected = set(data.get("draft_behavior_selected") or [])
+    if not raw:
+        await message.answer("Опишите поведение текстом или выберите пункты кнопками.", reply_markup=behavior_kb(kind))
+        return
+    await state.update_data(draft_behavior_raw=raw)
+    if raw.lower() in {"нет", "нет особенностей", "-"}:
+        await state.update_data(draft_behavior_selected=[])
+        await _finish_behavior(message, state)
+        return
+    try:
+        signals = await llm.extract_pet_signals(raw, field="behavior")
+    except LlmUnavailableError:
+        await message.answer(
+            "Текст сохранил для владельца. Автоматический разбор сейчас недоступен. "
+            "Отметьте известные особенности кнопками; остальные владелец увидит в заявке.",
+            reply_markup=behavior_kb(kind),
+        )
+        return
+    selected = (set(signals.behavior_flags) & set(behavior_options(kind))) if not signals.needs_clarification else set()
+    await state.update_data(draft_behavior_selected=sorted(selected))
+    labels = ", ".join(BEHAVIOR_LABELS[key] for key in sorted(selected)) or "явных особенностей не выделено"
+    suffix = "\nЕсли смысл не передан полностью, исправьте кнопками: исходный текст сохранён для владельца."
+    if signals.needs_clarification:
+        suffix = "\nФормулировка неоднозначна: отметьте нужные пункты кнопками или уточните текст. Исходный текст сохранён."
+    await state.set_state(BookingForm.pet_behavior_review)
     await message.answer(
-        "Пожалуйста, отметьте особенности кнопками — так важная информация не потеряется.",
-        reply_markup=behavior_kb(kind, selected),
+        f"Я понял: {labels}.{suffix}", reply_markup=extraction_review_kb("behavior")
+    )
+
+
+@router.callback_query(BookingForm.pet_behavior_review, F.data.startswith("review:behavior:"))
+async def review_behavior(callback: CallbackQuery, state: FSMContext) -> None:
+    action = (callback.data or "").split(":")[-1]
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    if action == "yes":
+        await _finish_behavior(callback.message, state)
+        return
+    data = await state.get_data()
+    await state.set_state(BookingForm.pet_behavior)
+    await callback.message.answer(
+        "Исправьте отмеченные пункты кнопками или напишите описание заново.",
+        reply_markup=behavior_kb(PetKind(data["draft_kind"]), set(data.get("draft_behavior_selected") or [])),
     )
 
 
 @router.message(BookingForm.pet_health)
-async def set_health(message: Message, state: FSMContext) -> None:
+async def set_health(message: Message, state: FSMContext, llm: LlmAdapter) -> None:
     text = (message.text or "").strip()
     health = None if text.lower() in {"нет", "-"} else text
+    if not text:
+        await message.answer("Опишите особенности здоровья текстом или нажмите «Нет».", reply_markup=no_kb())
+        return
+    if health is None:
+        await _finish_health(message, state, health=None, flags=[])
+        return
+    try:
+        signals = await llm.extract_pet_signals(health, field="health")
+        flags = [] if signals.needs_clarification else signals.health_flags
+    except LlmUnavailableError:
+        flags = []
+        await message.answer(
+            "Автоматический разбор недоступен. Сохраню ваше описание дословно "
+            "и передам владельцу на ручную проверку."
+        )
+    await state.update_data(draft_health_candidate=health, draft_health_flags_candidate=flags)
+    await state.set_state(BookingForm.pet_health_review)
+    labels = ", ".join(BEHAVIOR_LABELS[key] for key in flags) or "автоматических отметок нет"
+    await message.answer(
+        f"Описание: {health}\nОтметки: {labels}. Всё верно?",
+        reply_markup=extraction_review_kb("health"),
+    )
+
+
+async def _finish_health(message: Message, state: FSMContext, *, health: str | None, flags: list[str]) -> None:
     behavior_data = (await state.get_data()).get("draft_behavior") or {}
-    flags = BehaviorFlags.model_validate(behavior_data)
-    if health:
-        low = health.lower()
-        if "инвалид" in low:
-            flags.disability = True
-        if "лечен" in low or "укол" in low or "таблет" in low:
-            flags.needs_treatment = True
-        if "моч" in low:
-            flags.incontinence = True
-        if "подвиж" in low or "хромот" in low or "не ходит" in low:
-            flags.mobility_limited = True
-    await state.update_data(draft_health=health, draft_behavior=flags.model_dump())
+    current = BehaviorFlags.model_validate(behavior_data)
+    for key in flags:
+        if key in BehaviorFlags.model_fields:
+            setattr(current, key, True)
+    await state.update_data(draft_health=health, draft_behavior=current.model_dump())
     await state.set_state(BookingForm.pet_passport)
     await message.answer(
         "Пришлите фото страниц ветпаспорта (данные, прививки, обработки).\n"
         "Можно несколько фото. Когда закончите — «Готово».\n"
         "Если фото нет — «Без фото» (заявка уйдёт владельцу как неполная).",
         reply_markup=passport_kb(),
+    )
+
+
+@router.callback_query(BookingForm.pet_health_review, F.data.startswith("review:health:"))
+async def review_health(callback: CallbackQuery, state: FSMContext) -> None:
+    action = (callback.data or "").split(":")[-1]
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    if action != "yes":
+        await state.set_state(BookingForm.pet_health)
+        await callback.message.answer("Напишите уточнённое описание здоровья или нажмите «Нет».", reply_markup=no_kb())
+        return
+    data = await state.get_data()
+    await _finish_health(
+        callback.message, state,
+        health=data.get("draft_health_candidate"),
+        flags=list(data.get("draft_health_flags_candidate") or []),
     )
 
 
@@ -728,10 +846,24 @@ async def _run_placement(
 
     pricing = PricingService(catalog)
     choices: list[tuple[str, str]] = []
+    offered_labels: dict[str, str] = {}
     await message.answer("Подобрал свободные варианты:")
 
     for i, cand in enumerate(result.candidates, 1):
         acc = cand.accommodation
+        try:
+            label = booking_service.resolve_free_sheet_label(acc.id, date_from, date_to)
+        except ValueError:
+            continue  # Occupancy changed since the first calendar read.
+        except SheetsUnavailableError:
+            await state.update_data(unit_id=None, manual_matching=True)
+            await state.set_state(BookingForm.feeding)
+            await message.answer(
+                "Календарь стал недоступен. Передам заявку владельцу на ручной подбор. "
+                "Как будем кормить?", reply_markup=feeding_kb(),
+            )
+            return
+        offered_labels[acc.id] = label
         quote = pricing.quote(
             pets=pets,
             unit=acc,
@@ -751,11 +883,13 @@ async def _run_placement(
             )
         if quote.provisional or cand.requires_owner_review:
             caption += "\n⚠️ требует подтверждения владельцем"
+        if acc.photo_paths_by_species and len(acc.calendar_labels()) > 1:
+            caption += "\nФото показывает тип размещения; конкретный бокс подтвердит владелец."
 
         choices.append((acc.id, f"{i}. {acc.name} — {quote.total_rub} ₽"))
 
         photos = []
-        for path_str in acc.photo_paths[:5]:
+        for path_str in acc.photos_for(pets, sheet_label=label)[:5]:
             resolved = _resolve_photo(path_str, assets_dir)
             if resolved:
                 photos.append(resolved)
@@ -775,20 +909,37 @@ async def _run_placement(
         else:
             await message.answer(caption)
 
+    if not choices:
+        await state.update_data(unit_id=None, manual_matching=True)
+        await state.set_state(BookingForm.feeding)
+        await message.answer(
+            "Свободные варианты изменились. Передам заявку владельцу на ручной подбор. "
+            "Как будем кормить?", reply_markup=feeding_kb(),
+        )
+        return
     if result.requires_manual_matching:
         await message.answer("⚠️ Заявка всё равно уйдёт на ручное подтверждение.")
 
     await state.set_state(BookingForm.choose_unit)
+    await state.update_data(offered_sheet_labels=offered_labels)
     await message.answer("Выберите вариант:", reply_markup=unit_choice_kb(choices))
 
 
 @router.callback_query(BookingForm.choose_unit, F.data.startswith("unit:"))
 async def choose_unit(callback: CallbackQuery, state: FSMContext) -> None:
     unit_id = callback.data.split(":", 1)[1]
+    offered = (await state.get_data()).get("offered_sheet_labels") or {}
     if unit_id == "manual":
-        await state.update_data(unit_id=None, manual_matching=True)
+        await state.update_data(unit_id=None, requested_sheet_label=None, manual_matching=True)
     else:
-        await state.update_data(unit_id=unit_id, manual_matching=False)
+        if unit_id not in offered:
+            await callback.answer("Вариант больше не доступен. Повторите подбор.", show_alert=True)
+            return
+        await state.update_data(
+            unit_id=unit_id,
+            requested_sheet_label=offered[unit_id],
+            manual_matching=False,
+        )
     await state.set_state(BookingForm.feeding)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("Как будем кормить?", reply_markup=feeding_kb())
@@ -859,7 +1010,10 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
 
 
 @router.message(BookingForm.promo)
-async def set_promo(message: Message, state: FSMContext, catalog: Catalog) -> None:
+async def set_promo(
+    message: Message, state: FSMContext, catalog: Catalog,
+    booking_service: BookingService,
+) -> None:
     text = (message.text or "").strip()
     promo = None if text.lower() in {"нет", "-", "нет промокода"} else text.strip().upper()
     if promo:
@@ -867,7 +1021,7 @@ async def set_promo(message: Message, state: FSMContext, catalog: Catalog) -> No
         pricing = PricingService(catalog)
         rule = pricing.find_active_promo(
             promo,
-            date_from=date.fromisoformat(data["date_from"]),
+            on_date=pricing.promo_today(),
         )
         if rule is None:
             await message.answer(
@@ -876,8 +1030,15 @@ async def set_promo(message: Message, state: FSMContext, catalog: Catalog) -> No
                 reply_markup=no_kb(),
             )
             return
+        if rule.condition.get("first_placement") and await booking_service.repo.has_prior_placement_by_telegram(message.from_user.id, data.get("customer_contact")):
+            await message.answer(
+                "Этот промокод действует только на первое размещение. "
+                "По вашему аккаунту уже есть действующая или подтверждённая заявка. "
+                "Если это ошибка, сообщите владельцу; продолжить можно без промокода."
+            )
+            return
         await message.answer("Промокод принят — скидка появится в расчёте.")
-    await state.update_data(promo_code=promo)
+    await state.update_data(promo_code=promo, promo_verified=bool(promo))
     # Build a fake callback-like summary via helper
     await _show_summary_message(message, state, catalog)
 
@@ -902,6 +1063,7 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
                 feeding=feeding_opt,
                 service_ids=service_ids,
                 promo_code=promo,
+                promo_eligible=bool(data.get("promo_verified")),
             )
             await state.update_data(
                 price_total=quote.total_rub,
@@ -951,6 +1113,7 @@ async def submit_yes(
             manual_matching=bool(data.get("manual_matching") or data.get("requires_manual")),
             promo_code=data.get("promo_code"),
             customer_contact=data.get("customer_contact"),
+            requested_sheet_label=data.get("requested_sheet_label"),
         )
     except SheetsUnavailableError:
         logger.exception("booking submit failed: Sheets unavailable")
@@ -961,6 +1124,15 @@ async def submit_yes(
         await callback.answer()
         return
     except ValueError as exc:
+        if str(exc) in {"promo_not_first_placement", "promo_invalid_or_expired"}:
+            await state.update_data(promo_code=None, promo_verified=False)
+            await state.set_state(BookingForm.promo)
+            await callback.message.answer(
+                "Промокод больше не применим: срок истёк или право на первое размещение уже использовано. "
+                "Введите другой промокод или нажмите «Нет».", reply_markup=no_kb(),
+            )
+            await callback.answer()
+            return
         if str(exc) == "selected_unit_occupied":
             await callback.message.answer(
                 "Выбранное место только что заняли. Начните подбор заново: /start"

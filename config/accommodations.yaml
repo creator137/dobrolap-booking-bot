@@ -14,8 +14,9 @@ accommodations:
     allowed_species: [dog, cat, rabbit, rat, hamster, bird, guinea_pig]
     features: [indoor, private, vip]
     priority_tags: [vip, unvaccinated_cats, stressed_cats]
-    photo_paths:
-      - assets/rooms/16-house-reserve-vip-plus.jpg
+    photo_paths_by_sheet_label:
+      "Домик педбанник":
+        - assets/rooms/20-house-prebathroom.png
     notes: "Резервная VIP+ в домике (педбанник / 2 этаж)"
 
   - id: seasonal_vip_under_stairs
@@ -86,6 +87,11 @@ accommodations:
     tariff_kind: standard_m
     allowed_species: [dog, cat]
     features: [enclosure]
+    photo_paths_by_species:
+      cat:
+        - assets/rooms/24-standard-m-cat.png
+      dog:
+        - assets/rooms/25-standard-m-dog.png
 
   - id: optimal_s
     name: "Оптимальный S"
@@ -101,6 +107,9 @@ accommodations:
     tariff_kind: economy
     allowed_species: [cat]
     features: [enclosure]
+    photo_paths:
+      - assets/rooms/21-economy-cat-furnished.png
+      - assets/rooms/22-economy-cat-empty.png
 
   - id: outdoor_comfort
     name: "Уличный комфорт"
@@ -113,8 +122,9 @@ accommodations:
     allowed_species: [dog]
     weight_min_kg: 10
     features: [outdoor]
-    photo_paths:
-      - assets/rooms/17-covered-enclosure-interior.jpg
+    photo_paths_by_sheet_label:
+      "Уличный Вольер Комфорт для собак 2":
+        - assets/rooms/23-outdoor-enclosure-2.png
 
   - id: home_shared
     name: "Домашнее размещение"
@@ -175,9 +185,7 @@ accommodations:
     allowed_species: [dog, cat]
     features: [indoor, private, vip]
     priority_tags: [vip]
-    photo_paths:
-      - assets/rooms/04-unknown-a-plus-a.jpg
-    notes: "Отдельная ВИП+ комната из календаря"
+    notes: "Отдельная ВИП+ комната из календаря; фото А+А не подтверждено владельцем"
 
   - id: second_floor_hall
     name: "2 этаж, зал"
@@ -232,6 +240,15 @@ daily_rates:
   - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: medium, price_rub: 2000}
   - {accommodation_tariff: home, pet_kind: dog, size_class: medium, unavailable: true}
 
+  # --- dogs medium puppy ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: medium, is_young: true, price_from_rub: 2300, price_to_rub: 2600}
+  - {accommodation_tariff: comfort, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2100}
+  - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2150}
+  - {accommodation_tariff: premium, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2050}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: medium, is_young: true, price_rub: 1800}
+  - {accommodation_tariff: standard_m, pet_kind: dog, size_class: medium, is_young: true, price_rub: 1750}
+  - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2100}
+
   # --- dogs large adult (PDF: from 20 kg) ---
   - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: large, price_rub: 2400}
   - {accommodation_tariff: comfort, pet_kind: dog, size_class: large, price_rub: 2100}
@@ -242,6 +259,15 @@ daily_rates:
   - {accommodation_tariff: optimal_s, pet_kind: dog, size_class: large, unavailable: true}
   - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: large, price_rub: 2100}
   - {accommodation_tariff: home, pet_kind: dog, size_class: large, unavailable: true}
+
+  # --- dogs large puppy ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: large, is_young: true, price_from_rub: 2500, price_to_rub: 2600}
+  - {accommodation_tariff: comfort, pet_kind: dog, size_class: large, is_young: true, price_rub: 2200}
+  - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: large, is_young: true, price_rub: 2250}
+  - {accommodation_tariff: premium, pet_kind: dog, size_class: large, is_young: true, price_rub: 2150}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: large, is_young: true, price_rub: 1900}
+  - {accommodation_tariff: standard_m, pet_kind: dog, size_class: large, is_young: true, price_rub: 1850}
+  - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: large, is_young: true, price_rub: 2200}
 
   # --- cats adult ---
   - {accommodation_tariff: vip_plus, pet_kind: cat, price_rub: 1200}
@@ -260,7 +286,7 @@ daily_rates:
   - {accommodation_tariff: standard_l, pet_kind: cat, is_young: true, price_rub: 850}
   - {accommodation_tariff: standard_m, pet_kind: cat, is_young: true, price_rub: 800}
   - {accommodation_tariff: optimal_s, pet_kind: cat, is_young: true, price_rub: 700}
-  - {accommodation_tariff: economy, pet_kind: cat, is_young: true, price_rub: 750}
+  - {accommodation_tariff: economy, pet_kind: cat, is_young: true, price_rub: 700}
   - {accommodation_tariff: home, pet_kind: cat, is_young: true, price_rub: 700}
 
   # --- small animals: VIP+ only / from-prices ---

@@ -111,44 +111,28 @@ class SqliteRepository:
         contact: str | None = None,
         consent_at: datetime | None = None,
     ) -> int:
+        await self.db.execute(
+            """
+            INSERT INTO customers (telegram_user_id, name, contact, consent_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                name = COALESCE(excluded.name, customers.name),
+                contact = COALESCE(excluded.contact, customers.contact),
+                consent_at = COALESCE(excluded.consent_at, customers.consent_at)
+            """,
+            (
+                telegram_user_id,
+                name,
+                contact,
+                consent_at.isoformat() if consent_at else None,
+            ),
+        )
         cur = await self.db.execute(
-            "SELECT id FROM customers WHERE telegram_user_id = ?",
-            (telegram_user_id,),
+            "SELECT id FROM customers WHERE telegram_user_id = ?", (telegram_user_id,)
         )
         row = await cur.fetchone()
-        if row:
-            customer_id = int(row["id"])
-            await self.db.execute(
-                """
-                UPDATE customers
-                SET name = COALESCE(?, name),
-                    contact = COALESCE(?, contact),
-                    consent_at = COALESCE(?, consent_at)
-                WHERE id = ?
-                """,
-                (
-                    name,
-                    contact,
-                    consent_at.isoformat() if consent_at else None,
-                    customer_id,
-                ),
-            )
-        else:
-            cur = await self.db.execute(
-                """
-                INSERT INTO customers (telegram_user_id, name, contact, consent_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    telegram_user_id,
-                    name,
-                    contact,
-                    consent_at.isoformat() if consent_at else None,
-                ),
-            )
-            customer_id = int(cur.lastrowid)
         await self.db.commit()
-        return customer_id
+        return int(row["id"])
 
     async def get_customer_telegram_id(self, customer_id: int) -> int | None:
         cur = await self.db.execute(
@@ -200,6 +184,72 @@ class SqliteRepository:
             ),
         )
         await self.db.commit()
+
+    async def has_prior_placement(self, customer_id: int) -> bool:
+        """Existing active booking or a booking that was confirmed in this bot."""
+        cur = await self.db.execute(
+            """
+            SELECT 1 FROM bookings
+            WHERE customer_id = ? AND (
+                status IN ('WAITING_OWNER', 'OWNER_APPROVED', 'WAITING_PAYMENT', 'CONFIRMED')
+                OR json_extract(payload_json, '$.ever_confirmed') = 1
+            ) LIMIT 1
+            """,
+            (customer_id,),
+        )
+        return await cur.fetchone() is not None
+
+    async def has_prior_placement_by_telegram(
+        self, telegram_user_id: int, contact: str | None = None
+    ) -> bool:
+        cur = await self.db.execute(
+            """
+            SELECT 1 FROM bookings b JOIN customers c ON c.id = b.customer_id
+            WHERE (c.telegram_user_id = ? OR (? IS NOT NULL AND c.contact = ?))
+              AND (b.status IN ('WAITING_OWNER', 'OWNER_APPROVED', 'WAITING_PAYMENT', 'CONFIRMED')
+                   OR json_extract(b.payload_json, '$.ever_confirmed') = 1)
+            LIMIT 1
+            """,
+            (telegram_user_id, contact, contact),
+        )
+        return await cur.fetchone() is not None
+
+    async def save_first_placement_booking(self, record: BookingRecord) -> bool:
+        """Atomically claim the first-placement promo across bot processes."""
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                """
+                SELECT 1 FROM bookings b JOIN customers c ON c.id = b.customer_id
+                WHERE (b.customer_id = ? OR (c.contact IS NOT NULL AND c.contact = (
+                    SELECT contact FROM customers WHERE id = ?)))
+                  AND (b.status IN ('WAITING_OWNER', 'OWNER_APPROVED', 'WAITING_PAYMENT', 'CONFIRMED')
+                       OR json_extract(b.payload_json, '$.ever_confirmed') = 1)
+                LIMIT 1
+                """,
+                (record.customer_id, record.customer_id),
+            )
+            if await cur.fetchone():
+                await db.rollback()
+                return False
+            await db.execute(
+                """
+                INSERT INTO bookings (
+                    id, customer_id, date_from, date_to, status, unit_id,
+                    price_total, deposit_amount, owner_note, sheet_external_id,
+                    payload_json, hold_expires_at, last_reminder_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.id, record.customer_id, record.date_from.isoformat(),
+                    record.date_to.isoformat(), record.status.value, record.unit_id,
+                    record.price_total, record.deposit_amount, record.owner_note,
+                    record.sheet_external_id, json.dumps(record.payload, ensure_ascii=False),
+                    None, None, record.created_at.isoformat(), record.updated_at.isoformat(),
+                ),
+            )
+            await db.commit()
+            return True
 
     async def save_booking_if_status(
         self, record: BookingRecord, *, expected_status: BookingStatus

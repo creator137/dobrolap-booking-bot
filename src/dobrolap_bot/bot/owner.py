@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import logging
 
 from aiogram import F, Router
@@ -410,6 +412,9 @@ async def owner_alt_start(
                 feeding=feeding,
                 service_ids=list(booking.payload.get("service_ids") or []),
                 promo_code=booking.payload.get("promo_code"),
+                promo_eligible=bool(booking.payload.get("promo_rule_id")),
+                promo_at=date.fromisoformat(booking.payload["promo_at"])
+                if booking.payload.get("promo_at") else None,
             )
             price = f" — {quote.total_rub:,} ₽".replace(",", " ")
         except Exception:

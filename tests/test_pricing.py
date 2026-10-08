@@ -84,6 +84,7 @@ def test_promo_discount_when_rule_active(pricing, catalog):
             date_from=date(2026, 10, 10),
             date_to=date(2026, 10, 12),
             promo_code="DOBROLAP5",
+            promo_eligible=True,
         )
         base = 1900 * 2
         discount = -int(round(base * 0.05))
@@ -117,3 +118,18 @@ def test_invalid_dates(pricing, catalog):
             date_from=date(2026, 10, 10),
             date_to=date(2026, 10, 10),
         )
+
+
+def test_confirmed_pdf_prices_and_missing_puppy_tariff(pricing, catalog):
+    start, end = date(2026, 10, 10), date(2026, 10, 11)
+    kitten = PetProfile(kind=PetKind.CAT, name="Котёнок", age_months=3, is_puppy_or_kitten=True)
+    assert pricing.quote(pets=[kitten], unit=catalog.get_accommodation("economy"),
+                         date_from=start, date_to=end).total_rub == 700
+    medium_puppy = PetProfile(kind=PetKind.DOG, name="Щенок", weight_kg=15,
+                              age_months=4, is_puppy_or_kitten=True)
+    assert pricing.quote(pets=[medium_puppy], unit=catalog.get_accommodation("standard_m"),
+                         date_from=start, date_to=end).total_rub == 1750
+    mini_puppy = medium_puppy.model_copy(update={"weight_kg": 5})
+    quote = pricing.quote(pets=[mini_puppy], unit=catalog.get_accommodation("standard_l"),
+                          date_from=start, date_to=end)
+    assert quote.provisional and quote.total_rub == 0

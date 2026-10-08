@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from dobrolap_bot.config.loader import Catalog
 from dobrolap_bot.domain.enums import FeedingOption, PetKind, PriceScope
@@ -31,6 +32,8 @@ class PricingService:
         feeding: FeedingOption | None = None,
         service_ids: list[str] | None = None,
         promo_code: str | None = None,
+        promo_eligible: bool = False,
+        promo_at: date | None = None,
     ) -> PriceQuote:
         if date_to <= date_from:
             raise ValueError("date_to must be after date_from")
@@ -140,8 +143,9 @@ class PricingService:
         # Promo / discounts (active rules only)
         discount_lines = self._apply_discounts(
             accommodation_subtotal=accommodation_subtotal,
-            date_from=date_from,
+            on_date=promo_at or self.promo_today(),
             promo_code=promo_code,
+            promo_eligible=promo_eligible,
         )
         lines.extend(discount_lines)
 
@@ -175,8 +179,15 @@ class PricingService:
         extra = max(pet_count - 1, 0)
         return self.catalog.deposit_base_rub + extra * self.catalog.deposit_extra_pet_rub
 
-    def find_active_promo(self, promo_code: str, *, date_from: date) -> PriceRule | None:
+    @staticmethod
+    def promo_today() -> date:
+        return datetime.now(ZoneInfo("Asia/Yekaterinburg")).date()
+
+    def find_active_promo(
+        self, promo_code: str, *, on_date: date | None = None, date_from: date | None = None
+    ) -> PriceRule | None:
         """Return a currently applicable promo rule without changing quote semantics."""
+        valid_on = on_date or date_from or self.promo_today()
         normalized = promo_code.strip().upper()
         if not normalized:
             return None
@@ -186,9 +197,9 @@ class PricingService:
             configured = rule.condition.get("promo_code")
             if not configured or normalized != str(configured).strip().upper():
                 continue
-            if rule.date_from and date_from < rule.date_from:
+            if rule.date_from and valid_on < rule.date_from:
                 continue
-            if rule.date_to and date_from > rule.date_to:
+            if rule.date_to and valid_on > rule.date_to:
                 continue
             if rule.percent is None and rule.amount_rub is None:
                 continue
@@ -208,12 +219,6 @@ class PricingService:
         ]
         if exact:
             return exact[0]
-        # Fallback: adult rate if young missing
-        if young:
-            return self._find_rate(
-                pet.model_copy(update={"is_puppy_or_kitten": False}),
-                tariff_kind,
-            )
         return None
 
     def _day_amount(self, rate: DailyRate) -> tuple[int, bool, str | None]:
@@ -254,8 +259,9 @@ class PricingService:
         self,
         *,
         accommodation_subtotal: int,
-        date_from: date,
+        on_date: date,
         promo_code: str | None,
+        promo_eligible: bool,
     ) -> list[QuoteLine]:
         lines: list[QuoteLine] = []
         rules = sorted(
@@ -263,16 +269,23 @@ class PricingService:
             key=lambda r: r.priority,
         )
         applied_non_stackable = False
+        promo_rule = (
+            self.find_active_promo(promo_code, on_date=on_date)
+            if promo_code and promo_eligible else None
+        )
+        if promo_rule is not None:
+            # A non-stackable promo excludes every other discount.
+            rules = [promo_rule]
         for rule in rules:
             if applied_non_stackable and not rule.stackable:
                 continue
-            if rule.date_from and date_from < rule.date_from:
+            if rule.date_from and on_date < rule.date_from:
                 continue
-            if rule.date_to and date_from > rule.date_to:
+            if rule.date_to and on_date > rule.date_to:
                 continue
             code = rule.condition.get("promo_code")
             if code:
-                if not promo_code or promo_code.strip().upper() != str(code).upper():
+                if not promo_eligible or not promo_code or promo_code.strip().upper() != str(code).upper():
                     continue
             amount = 0
             if rule.percent is not None:

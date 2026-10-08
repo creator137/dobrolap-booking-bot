@@ -43,6 +43,7 @@ class PetProfile(BaseModel):
     vaccinated_until: date | None = None
     parasite_treated: bool | None = None
     behavior: BehaviorFlags = Field(default_factory=BehaviorFlags)
+    behavior_notes: str | None = None
     health_notes: str | None = None
     passport_file_ids: list[str] = Field(default_factory=list)
 
@@ -67,10 +68,14 @@ class Accommodation(BaseModel):
     features: list[str] = Field(default_factory=list)
     priority_tags: list[str] = Field(default_factory=list)
     photo_paths: list[str] = Field(default_factory=list)
+    photo_paths_by_species: dict[PetKind, list[str]] = Field(default_factory=dict)
+    photo_paths_by_sheet_label: dict[str, list[str]] = Field(default_factory=dict)
     sheet_unit_id: str | None = None
     # Multiple calendar rows for one catalog unit (e.g. Комфорт 1/2/3).
     sheet_unit_ids: list[str] = Field(default_factory=list)
     active: bool = True
+    seasonal: bool = False
+    notes: str | None = None
 
     def calendar_labels(self) -> list[str]:
         if self.sheet_unit_ids:
@@ -78,8 +83,18 @@ class Accommodation(BaseModel):
         if self.sheet_unit_id:
             return [self.sheet_unit_id.strip()]
         return [self.name.strip()]
-    seasonal: bool = False
-    notes: str | None = None
+
+    def photos_for(
+        self, pets: list[PetProfile], *, sheet_label: str | None = None
+    ) -> list[str]:
+        """Only photos applicable to the offered species and exact calendar row."""
+        paths = list(self.photo_paths)
+        kinds = {pet.kind for pet in pets}
+        if len(kinds) == 1:
+            paths.extend(self.photo_paths_by_species.get(next(iter(kinds)), []))
+        if sheet_label:
+            paths.extend(self.photo_paths_by_sheet_label.get(sheet_label, []))
+        return list(dict.fromkeys(paths))
 
 
 class DailyRate(BaseModel):
