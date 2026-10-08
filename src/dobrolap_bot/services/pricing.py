@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from dobrolap_bot.config.loader import Catalog
@@ -33,6 +33,7 @@ class PricingService:
         promo_code: str | None = None,
         promo_eligible: bool = False,
         promo_at: date | None = None,
+        arrival_time: str | None = None,
     ) -> PriceQuote:
         if date_to <= date_from:
             raise ValueError("date_to must be after date_from")
@@ -61,7 +62,7 @@ class PricingService:
                     )
                 )
                 continue
-            rate = self._find_rate(pet, unit.tariff_kind)
+            rate = self._find_rate(pet, unit.rate_tariff_kind or unit.tariff_kind)
             if rate is None or rate.unavailable:
                 provisional = True
                 lines.append(
@@ -76,7 +77,10 @@ class PricingService:
                 continue
 
             day_price, day_provisional, detail = self._day_amount(rate)
-            if unit.tariff_kind == "vip":
+            if unit.rate_adjustment_rub:
+                day_price = max(0, day_price + unit.rate_adjustment_rub)
+                detail = (detail or "") + f"; корректировка тарифа {unit.rate_adjustment_rub:+} ₽/сутки"
+            if unit.tariff_kind == "vip" and not unit.rate_tariff_kind:
                 provisional = True
                 detail = (detail or "") + "; обычный VIP без отдельной тарифной колонки в XLSX"
             amount = day_price * nights
@@ -103,18 +107,15 @@ class PricingService:
                 )
 
         # Feeding
-        if feeding == FeedingOption.NATURAL_COOKED:
-            # Unit of billing unknown — quote lower bound × nights as provisional
-            feed_from = 150
-            amount = feed_from * nights * max(len(pets), 1)
-            provisional = True
+        if feeding in {FeedingOption.NATURAL_COOKED, FeedingOption.NATURAL_READY, FeedingOption.NATURAL_PORRIDGE}:
+            feed_rate = 150 if feeding == FeedingOption.NATURAL_READY else 250
+            amount = feed_rate * nights * max(len(pets), 1)
             lines.append(
                 QuoteLine(
                     scope=PriceScope.FEEDING,
-                    label="Натуральное питание (ориентир)",
+                    label="Натуральное питание",
                     amount_rub=amount,
-                    detail="150–250 ₽, единица тарификации не подтверждена; взята нижняя граница × сутки × питомцы",
-                    provisional=True,
+                    detail=f"{feed_rate} ₽ за сутки. Продукты предоставляет владелец либо гостиница покупает с передачей чеков.",
                 )
             )
         elif feeding == FeedingOption.HOTEL_RATION:
@@ -160,6 +161,36 @@ class PricingService:
         accommodation_subtotal = sum(
             ln.amount_rub for ln in lines if ln.scope == PriceScope.ACCOMMODATION
         ) + shared_pet_discount
+
+        try:
+            parsed_arrival = time.fromisoformat(arrival_time) if arrival_time else None
+        except ValueError:
+            parsed_arrival = None
+        arrival_fraction = 0
+        arrival_label = ""
+        if parsed_arrival and time(16, 30) <= parsed_arrival < time(19, 0):
+            arrival_fraction = 0.5
+            arrival_label = "Заезд 16:30–19:00 (50% суточной стоимости)"
+        elif parsed_arrival and time(8, 0) <= parsed_arrival <= time(11, 0):
+            arrival_fraction = 1
+            arrival_label = "Заезд 08:00–11:00 (полная стоимость суток)"
+        if arrival_fraction:
+            half_day_total = 0
+            for pet in pets:
+                arrival_rate = self._find_rate(pet, unit.rate_tariff_kind or unit.tariff_kind)
+                if arrival_rate is None or arrival_rate.unavailable:
+                    provisional = True
+                    continue
+                daily, is_provisional, _ = self._day_amount(arrival_rate)
+                half_day_total += int(max(0, daily + unit.rate_adjustment_rub) * arrival_fraction)
+                provisional = provisional or is_provisional
+            if half_day_total:
+                lines.append(QuoteLine(
+                    scope=PriceScope.SURCHARGE,
+                    label=arrival_label,
+                    amount_rub=half_day_total,
+                    detail="Индивидуальный случай, рассчитывается как перерыв",
+                ))
 
         # Promo / discounts (active rules only)
         discount_lines = self._apply_discounts(

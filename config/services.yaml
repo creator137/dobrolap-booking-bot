@@ -1,5 +1,5 @@
 # Reference prices from «Услуги Добролап.xlsx».
-# The owner sets the actual amount; the bot records selections and never quotes these prices.
+# The bot keeps services operator-priced; natural-feeding daily rates are confirmed below.
 
 services:
   - id: hygiene_complex_dog
@@ -89,8 +89,8 @@ services:
     applies_to: [dog]
 
   - id: natural_feeding
-    name: "Приготовление натурального питания"
+    name: "Натуральное питание (готовый вариант или каша)"
     price_from_rub: 150
     price_to_rub: 250
-    unit: unclear
-    notes: "Единица тарификации (день/порция) не подтверждена владельцем"
+    unit: per_day
+    notes: "150 ₽/сутки — готовый вариант с минимальной нарезкой; 250 ₽/сутки — если готовить кашу. Продукты приносит владелец либо покупает гостиница с чеками"

@@ -24,12 +24,7 @@ class PetKind(StrEnum):
 
 
 class DogSizeClass(StrEnum):
-    """Weight baskets from the current PDF price list.
-
-    Boundary ownership (exactly 10 / 20 kg) still needs owner confirmation.
-    Until then we use half-open intervals: [0, 10), [10, 20), [20, ∞).
-    XLSX says large dogs start at 25 kg — that conflict is unresolved.
-    """
+    """Owner-confirmed dog weight bands: up to 10 kg, over 10 to under 20 kg, 20+ kg."""
 
     MINIATURE = "miniature"  # <= 10 kg
     MEDIUM = "medium"  # 10–20 kg
@@ -40,6 +35,8 @@ class FeedingOption(StrEnum):
     OWNER_FOOD = "owner_food"
     HOTEL_RATION = "hotel_ration"
     NATURAL_COOKED = "natural_cooked"
+    NATURAL_READY = "natural_ready"
+    NATURAL_PORRIDGE = "natural_porridge"
 
 
 class PriceScope(StrEnum):

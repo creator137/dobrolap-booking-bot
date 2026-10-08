@@ -198,6 +198,7 @@ class BookingService:
         requested_sheet_label: str | None = None,
         arrival_time: str | None = None,
         service_details: dict[str, Any] | None = None,
+        review_discount_claim: bool = False,
     ) -> tuple[BookingRecord, PriceQuote | None]:
         customer_id = await self.repo.upsert_customer(
             telegram_user_id=telegram_user_id,
@@ -237,6 +238,7 @@ class BookingService:
                 promo_code=promo_code,
                 promo_eligible=promo_rule is not None,
                 promo_at=promo_at,
+                arrival_time=arrival_time,
             )
 
         now = _utcnow()
@@ -249,6 +251,7 @@ class BookingService:
             "placement_flags": placement_flags,
             "manual_matching": manual_matching,
             "promo_code": promo_code,
+            "review_discount_claim": review_discount_claim,
             "promo_rule_id": promo_rule.id if promo_rule else None,
             "promo_at": promo_at.isoformat() if promo_rule else None,
             "requested_sheet_label": requested_sheet_label,
@@ -600,6 +603,7 @@ class BookingService:
             promo_eligible=bool(booking.payload.get("promo_rule_id")),
             promo_at=date.fromisoformat(booking.payload["promo_at"])
             if booking.payload.get("promo_at") else None,
+            arrival_time=booking.payload.get("arrival_time"),
         )
         held = booking.payload.get("sheet_label")
         if held:

@@ -81,7 +81,19 @@ def feeding_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Корм владельца")],
             [KeyboardButton(text="Рацион гостиницы")],
-            [KeyboardButton(text="Натуральное с приготовлением")],
+            [KeyboardButton(text="Натуральное — готовое, минимум нарезки (150 ₽/сутки)")],
+            [KeyboardButton(text="Натуральное — приготовить кашу (250 ₽/сутки)")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def feeding_source_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Продукты привезу сам(а)")],
+            [KeyboardButton(text="Купите продукты, пожалуйста, с чеками")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,

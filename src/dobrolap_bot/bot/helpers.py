@@ -21,7 +21,9 @@ KIND_MAP = {
 FEED_MAP = {
     "корм владельца": FeedingOption.OWNER_FOOD,
     "рацион гостиницы": FeedingOption.HOTEL_RATION,
-    "натуральное с приготовлением": FeedingOption.NATURAL_COOKED,
+    "натуральное с приготовлением": FeedingOption.NATURAL_PORRIDGE,
+    "натуральное — готовое, минимум нарезки (150 ₽/сутки)": FeedingOption.NATURAL_READY,
+    "натуральное — приготовить кашу (250 ₽/сутки)": FeedingOption.NATURAL_PORRIDGE,
 }
 
 

@@ -39,6 +39,7 @@ from dobrolap_bot.bot.keyboards import (
     contact_kb,
     extraction_review_kb,
     feeding_kb,
+    feeding_source_kb,
     no_kb,
     owner_actions_kb,
     owner_cancel_kb,
@@ -74,6 +75,14 @@ from dobrolap_bot.services.summary import format_client_status, format_owner_sum
 
 router = Router(name="client")
 logger = logging.getLogger(__name__)
+REVIEW_AND_VOLUNTEER_INFO = (
+    "\n\nАкция за отзывы: 5% за отзыв, 10% за отзыв с фото питомца, "
+    "15% за отзывы на двух разных площадках. Скидка действует на одну передержку "
+    "до 31 дня; повторно — за отзыв на новой площадке. Максимум по акции за отзывы — 25%. "
+    "Чтобы заявить скидку, отправьте слово «Отзыв»; подтверждение проверит оператор.\n"
+    "Если вы волонтёр — оставьте заявку, оператор свяжется с вами для уточнения "
+    "условий и расчёта льготной стоимости."
+)
 
 
 def _available_services(catalog: Catalog, pets: list[PetProfile]) -> list:
@@ -438,7 +447,12 @@ async def set_pet_kind(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(draft_kind=kind.value)
     await state.set_state(BookingForm.pet_name)
-    await message.answer("Кличка питомца?")
+    note = (
+        " Для птиц и грызунов обязательно нужна собственная клетка."
+        if kind in {PetKind.BIRD, PetKind.RABBIT, PetKind.RAT, PetKind.HAMSTER, PetKind.GUINEA_PIG}
+        else ""
+    )
+    await message.answer("Кличка питомца?" + note)
 
 
 @router.message(BookingForm.pet_name)
@@ -906,6 +920,7 @@ async def _run_placement(
             date_from=date_from,
             date_to=date_to,
             feeding=FeedingOption.OWNER_FOOD,
+            arrival_time=data.get("arrival_time"),
         )
         day_hint = quote.total_rub // nights if nights else quote.total_rub
         price_text = (
@@ -990,6 +1005,13 @@ async def set_feeding(message: Message, state: FSMContext, catalog: Catalog) -> 
         await message.answer("Выберите вариант с клавиатуры.", reply_markup=feeding_kb())
         return
     await state.update_data(feeding=feeding.value, service_ids=[])
+    if feeding in {FeedingOption.NATURAL_READY, FeedingOption.NATURAL_PORRIDGE, FeedingOption.NATURAL_COOKED}:
+        await state.set_state(BookingForm.feeding_source)
+        await message.answer(
+            "Кто предоставляет продукты? При покупке гостиница передаст чеки.",
+            reply_markup=feeding_source_kb(),
+        )
+        return
     await state.set_state(BookingForm.services)
     data = await state.get_data()
     pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
@@ -999,9 +1021,36 @@ async def set_feeding(message: Message, state: FSMContext, catalog: Catalog) -> 
         await state.set_state(BookingForm.promo)
         await message.answer(
             "Для этих питомцев дополнительных услуг в каталоге пока нет.\n"
-            "Есть промокод? Пришлите его или нажмите «Нет».",
+            "Есть промокод? Пришлите его или нажмите «Нет»." + REVIEW_AND_VOLUNTEER_INFO,
             reply_markup=no_kb(),
         )
+        return
+    await message.answer(
+        "Дополнительные услуги (можно несколько). Стоимость каждой услуги оператор сообщит отдельно. "
+        "Если выберете зоотакси, попрошу адрес для расчёта поездки. Нажмите «Готово», когда закончите.",
+        reply_markup=services_kb(items),
+    )
+
+
+@router.message(BookingForm.feeding_source)
+async def set_feeding_source(message: Message, state: FSMContext, catalog: Catalog) -> None:
+    answer = (message.text or "").strip()
+    options = {
+        "продукты привезу сам(а)": "owner_provides",
+        "купите продукты, пожалуйста, с чеками": "hotel_purchases_receipts",
+    }
+    source = options.get(answer.lower())
+    if not source:
+        await message.answer("Выберите, кто предоставляет продукты.", reply_markup=feeding_source_kb())
+        return
+    await state.update_data(natural_food_source=source)
+    await state.set_state(BookingForm.services)
+    data = await state.get_data()
+    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    items = [(s.id, s.name, False) for s in _available_services(catalog, pets)]
+    if not items:
+        await state.set_state(BookingForm.promo)
+        await message.answer("Дополнительных услуг для выбранных питомцев нет. Есть промокод? Пришлите его или нажмите «Нет»." + REVIEW_AND_VOLUNTEER_INFO, reply_markup=no_kb())
         return
     await message.answer(
         "Дополнительные услуги (можно несколько). Стоимость каждой услуги оператор сообщит отдельно. "
@@ -1032,7 +1081,7 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
             await callback.message.answer("Укажите адрес, откуда забрать питомца для зоотакси:")
         else:
             await state.set_state(BookingForm.promo)
-            await callback.message.answer("Есть промокод? Пришлите его или нажмите «Нет».", reply_markup=no_kb())
+            await callback.message.answer("Есть промокод? Пришлите его или нажмите «Нет»." + REVIEW_AND_VOLUNTEER_INFO, reply_markup=no_kb())
         await callback.answer()
         return
 
@@ -1057,7 +1106,7 @@ async def set_taxi_address(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(taxi_address=address)
     await state.set_state(BookingForm.promo)
-    await message.answer("Адрес передам оператору для расчёта зоотакси. Есть промокод? Пришлите его или нажмите «Нет».", reply_markup=no_kb())
+    await message.answer("Адрес передам оператору для расчёта зоотакси. Есть промокод? Пришлите его или нажмите «Нет»." + REVIEW_AND_VOLUNTEER_INFO, reply_markup=no_kb())
 
 
 @router.message(BookingForm.promo)
@@ -1066,6 +1115,12 @@ async def set_promo(
     booking_service: BookingService,
 ) -> None:
     text = (message.text or "").strip()
+    review_claim = text.lower() in {"отзыв", "акция за отзыв", "скидка за отзыв"}
+    if review_claim:
+        await state.update_data(review_discount_claim=True, promo_code=None, promo_verified=False)
+        await message.answer("Отметил запрос скидки за отзыв. Оператор проверит отзыв и площадку.")
+        await _show_summary_message(message, state, catalog)
+        return
     promo = None if text.lower() in {"нет", "-", "нет промокода"} else text.strip().upper()
     if promo:
         data = await state.get_data()
@@ -1115,6 +1170,7 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
                 service_ids=service_ids,
                 promo_code=promo,
                 promo_eligible=bool(data.get("promo_verified")),
+                arrival_time=data.get("arrival_time"),
             )
             await state.update_data(
                 price_total=(
@@ -1168,7 +1224,13 @@ async def submit_yes(
             customer_contact=data.get("customer_contact"),
             requested_sheet_label=data.get("requested_sheet_label"),
             arrival_time=data.get("arrival_time"),
-            service_details={"taxi_address": data.get("taxi_address")} if data.get("taxi_address") else {},
+            service_details={
+                key: value for key, value in {
+                    "taxi_address": data.get("taxi_address"),
+                    "natural_food_source": data.get("natural_food_source"),
+                }.items() if value
+            },
+            review_discount_claim=bool(data.get("review_discount_claim")),
         )
     except SheetsUnavailableError:
         logger.exception("booking submit failed: Sheets unavailable")

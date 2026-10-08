@@ -121,6 +121,9 @@ class PlacementService:
         # Untreated parasites → no automatic offer.
         if pet.parasite_treated is False:
             return []
+        if pet.kind == PetKind.DOG and self._dog_needs_manual(pet):
+            # Owner requires a separate room or an individual decision for these cases.
+            return []
 
         out: list[PlacementCandidate] = []
         for unit in self.catalog.active_accommodations():
@@ -152,7 +155,7 @@ class PlacementService:
 
         warnings: list[str] = []
         requires_review = False
-        if unit.tariff_kind == "vip":
+        if unit.tariff_kind == "vip" and not unit.rate_tariff_kind:
             warnings.append("ordinary_vip_price_unconfirmed")
             requires_review = True
         if unit.tariff_unconfirmed:
@@ -182,9 +185,6 @@ class PlacementService:
             or b.mobility_limited
             or b.needs_treatment
             or b.disability
-            or b.loud_barking
-            or b.elderly
-            or b.incontinence
         )
 
     def _dog_allowed(self, pet: PetProfile, unit: Accommodation) -> bool:

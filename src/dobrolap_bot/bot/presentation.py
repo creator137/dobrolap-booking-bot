@@ -36,6 +36,8 @@ FEEDING_LABELS = {
     FeedingOption.OWNER_FOOD: "Корм привозит владелец",
     FeedingOption.HOTEL_RATION: "Рацион зоогостиницы",
     FeedingOption.NATURAL_COOKED: "Натуральное питание с приготовлением",
+    FeedingOption.NATURAL_READY: "Натуральное питание: готовое, минимум нарезки (150 ₽/сутки)",
+    FeedingOption.NATURAL_PORRIDGE: "Натуральное питание: приготовить кашу (250 ₽/сутки)",
 }
 
 BEHAVIOR_LABELS = {
@@ -194,6 +196,8 @@ def _pet_lines(pet: PetProfile, *, prefix: str = "") -> list[str]:
             f"{indent}  Ветпаспорт: "
             + (f"загружено фото — {len(pet.passport_file_ids)}" if pet.passport_file_ids else "фото не загружено")
         )
+    elif pet.kind in {PetKind.BIRD, PetKind.RABBIT, PetKind.RAT, PetKind.HAMSTER, PetKind.GUINEA_PIG}:
+        lines.append(f"{indent}  Владелец должен привезти собственную клетку (обязательно).")
     features = behavior_labels(pet)
     lines.append(f"{indent}  Поведение: " + (", ".join(features) if features else "особенности не отмечены"))
     if pet.behavior_notes and pet.behavior_notes.strip().lower() not in {"нет", "нет особенностей", "-"}:
@@ -247,6 +251,7 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
             f"Питание: {feeding_label(booking.payload.get('feeding'))}",
             f"Дополнительные услуги: {_services_text(list(booking.payload.get('service_ids') or []), catalog)}",
             f"Промокод: {booking.payload.get('promo_code') or 'Нет'}",
+            *(["Запрос скидки за отзыв: оператор проверит подтверждение и площадку"] if booking.payload.get("review_discount_claim") else []),
             f"Предварительная стоимость: {format_money(booking.price_total) if booking.price_total is not None else 'рассчитает оператор'}",
             f"Залог: {format_money(booking.deposit_amount)}",
         ]
@@ -254,6 +259,9 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
     taxi_address = (booking.payload.get("service_details") or {}).get("taxi_address")
     if taxi_address:
         lines.append(f"Адрес для зоотакси: {taxi_address}")
+    food_source = (booking.payload.get("service_details") or {}).get("natural_food_source")
+    if food_source:
+        lines.append("Продукты для натурального питания: " + ("предоставляет владелец" if food_source == "owner_provides" else "покупает гостиница, передаёт чеки"))
     if booking.payload.get("service_ids"):
         lines.append("Стоимость дополнительных услуг определит оператор.")
     if booking.payload.get("quote_provisional"):
@@ -319,11 +327,14 @@ def format_draft_summary(
             f"Размещение: {unit.name if unit else 'подбирает владелец'}",
             f"Питание: {feeding_label(data.get('feeding'))}",
             f"Дополнительные услуги: {_services_text(list(data.get('service_ids') or []), catalog)}",
-            f"Промокод: {data.get('promo_code') or 'Нет'}",
+        f"Промокод: {data.get('promo_code') or 'Нет'}",
+        *(["Запрос скидки за отзыв: оператор проверит подтверждение и площадку"] if data.get("review_discount_claim") else []),
         ]
     )
     if "zoo_taxi" in set(data.get("service_ids") or []) and data.get("taxi_address"):
         lines.append(f"Адрес для зоотакси: {data['taxi_address']}")
+    if data.get("natural_food_source"):
+        lines.append("Продукты для натурального питания: " + ("предоставляет владелец" if data["natural_food_source"] == "owner_provides" else "покупает гостиница, передаёт чеки"))
     if quote:
         if quote.has_accommodation_amount:
             lines.append(f"Предварительная стоимость: {format_money(quote.total_rub)}")

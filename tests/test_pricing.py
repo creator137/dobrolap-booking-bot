@@ -180,11 +180,42 @@ def test_group_price_applies_confirmed_fifty_percent_discount(pricing, catalog):
     assert "50%" in quote.explanation
 
 
-def test_separate_kitchen_room_has_no_unconfirmed_home_rate(pricing, catalog):
+def test_separate_kitchen_room_is_vip_minus_250(pricing, catalog):
     pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6)
     quote = pricing.quote(
         pets=[pet], unit=catalog.get_accommodation("house_kitchen"),
         date_from=date(2026, 10, 10), date_to=date(2026, 10, 11),
     )
-    assert quote.total_rub == 0 and quote.provisional
-    assert not quote.has_accommodation_amount
+    assert quote.total_rub == 1950 and not quote.provisional
+
+
+def test_natural_food_options_are_daily_and_distinct(pricing, catalog):
+    unit = catalog.get_accommodation("comfort")
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6)
+    ready = pricing.quote(pets=[pet], unit=unit, date_from=date(2026, 10, 10),
+                          date_to=date(2026, 10, 12), feeding=FeedingOption.NATURAL_READY)
+    porridge = pricing.quote(pets=[pet], unit=unit, date_from=date(2026, 10, 10),
+                             date_to=date(2026, 10, 12), feeding=FeedingOption.NATURAL_PORRIDGE)
+    assert ready.total_rub - 1900 * 2 == 150 * 2
+    assert porridge.total_rub - 1900 * 2 == 250 * 2
+
+
+def test_arrival_between_1630_and_1900_adds_half_day_rate(pricing, catalog):
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6)
+    quote = pricing.quote(
+        pets=[pet], unit=catalog.get_accommodation("comfort"),
+        date_from=date(2026, 10, 10), date_to=date(2026, 10, 11),
+        arrival_time="16:30",
+    )
+    assert quote.total_rub == 1900 + 950
+    assert any("50% суточной стоимости" in line.label for line in quote.lines)
+
+
+def test_arrival_08_to_11_adds_full_daily_rate(pricing, catalog):
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6)
+    quote = pricing.quote(
+        pets=[pet], unit=catalog.get_accommodation("comfort"),
+        date_from=date(2026, 10, 10), date_to=date(2026, 10, 11),
+        arrival_time="09:00",
+    )
+    assert quote.total_rub == 1900 * 2

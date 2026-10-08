@@ -62,6 +62,8 @@ class Accommodation(BaseModel):
     id: str
     name: str
     tariff_kind: str
+    rate_tariff_kind: str | None = None
+    rate_adjustment_rub: int = 0
     allowed_species: list[PetKind]
     weight_min_kg: float | None = None
     weight_max_kg: float | None = None

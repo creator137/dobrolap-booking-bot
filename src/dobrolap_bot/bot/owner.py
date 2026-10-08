@@ -415,6 +415,7 @@ async def owner_alt_start(
                 promo_eligible=bool(booking.payload.get("promo_rule_id")),
                 promo_at=date.fromisoformat(booking.payload["promo_at"])
                 if booking.payload.get("promo_at") else None,
+                arrival_time=booking.payload.get("arrival_time"),
             )
             price = (
                 f" — {quote.total_rub:,} ₽".replace(",", " ")

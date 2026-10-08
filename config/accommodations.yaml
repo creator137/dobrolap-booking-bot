@@ -22,16 +22,17 @@ accommodations:
     notes: "Резервная VIP+ в домике (педбанник / 2 этаж)"
 
   - id: seasonal_vip_under_stairs
-    name: "Сезонная VIP (под лестницей)"
+    name: "Домик под лестницей (VIP)"
     sheet_unit_id: "Домик под лестницей"
-    tariff_kind: vip  # ordinary VIP is not a separate XLSX tariff column
+    tariff_kind: vip
+    rate_tariff_kind: vip_plus
+    rate_adjustment_rub: -250
     allowed_species: [dog, cat]
-    features: [indoor, seasonal, pass-through]
-    priority_tags: [vip, seasonal]
-    seasonal: true
+    features: [indoor, pass-through, private, vip]
+    priority_tags: [vip]
     photo_paths:
       - assets/rooms/08-seasonal-vip-under-stairs.jpg
-    notes: "Проходная/совмещаемая; обычный VIP без отдельной тарифной колонки в XLSX"
+    notes: "По отдельности — VIP по тарифу VIP+ минус 250 ₽/сутки; вместе с Домиком кухня образуют VIP+"
 
   - id: comfort_plus
     name: "Комфорт+"
@@ -162,17 +163,18 @@ accommodations:
     notes: "Приоритет при лечении/инвалидности; в таблице под ВИП+"
 
   - id: house_kitchen
-    name: "Домик кухня"
+    name: "Домик кухня (VIP)"
     sheet_unit_id: "Домик Кухня"
-    tariff_kind: home
-    tariff_unconfirmed: true
+    tariff_kind: vip
+    rate_tariff_kind: vip_plus
+    rate_adjustment_rub: -250
     allowed_species: [dog, cat]
     features: [indoor, house, private]
     priority_tags: [loud_barking, separate_house, vip]
     photo_paths:
       - assets/rooms/09-house-kitchen-1.jpg
       - assets/rooms/10-house-kitchen-2.jpg
-    notes: "Отдельный домик; приоритет при сильном лае"
+    notes: "По отдельности — VIP по тарифу VIP+ минус 250 ₽/сутки; вместе с Домиком под лестницей образуют VIP+"
 
   - id: second_floor_formulas
     name: "2 этаж, комната с формулами"

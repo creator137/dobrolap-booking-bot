@@ -22,6 +22,7 @@ class BookingForm(StatesGroup):
     add_another_pet = State()
     choose_unit = State()
     feeding = State()
+    feeding_source = State()
     services = State()
     taxi_address = State()
     promo = State()

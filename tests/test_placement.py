@@ -120,7 +120,7 @@ def test_under_one_month_vip_and_owner_confirmed_large_weight_boundary(placement
     assert not any("weight_category_20_to_25_kg" in flag for flag in result.owner_flags)
 
 
-def test_aggressive_dog_only_private_or_vip(placement):
+def test_aggressive_dog_is_sent_for_operator_room_decision(placement):
     pet = PetProfile(
         kind=PetKind.DOG,
         name="Злой",
@@ -130,19 +130,11 @@ def test_aggressive_dog_only_private_or_vip(placement):
         behavior=BehaviorFlags(aggression=True),
     )
     result = placement.suggest([pet])
-    assert result.candidates
-    for c in result.candidates:
-        acc = c.accommodation
-        assert (
-            acc.tariff_kind in {"vip", "vip_plus"}
-            or "private" in acc.features
-            or "house" in acc.features
-            or "separate_house" in acc.priority_tags
-            or "vip" in acc.features
-        )
+    assert result.candidates == []
+    assert result.requires_manual_matching
 
 
-def test_unvaccinated_dog_only_vip(placement):
+def test_unvaccinated_dog_is_sent_for_manual_room_decision(placement):
     pet = PetProfile(
         kind=PetKind.DOG,
         name="Безпрививки",
@@ -151,5 +143,5 @@ def test_unvaccinated_dog_only_vip(placement):
         parasite_treated=True,
     )
     result = placement.suggest([pet])
-    assert result.candidates
-    assert all(c.accommodation.tariff_kind in {"vip", "vip_plus"} for c in result.candidates)
+    assert result.candidates == []
+    assert result.requires_manual_matching
