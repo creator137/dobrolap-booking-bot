@@ -6,7 +6,7 @@ deposit:
 
 price_rules:
   - id: dobrolapki_first_stay_2026
-    # Earlier owner instruction; stacking needs reconciliation with the new flyer.
+    # Сочетание не более двух акций; окончательную сумму утверждает оператор.
     scope: discount
     date_to: 2026-11-01
     condition:
@@ -16,9 +16,43 @@ price_rules:
       max_uses_per_customer: 1
     percent: 5
     priority: 1
-    stackable: false
+    stackable: true
     active: true
     description: "ДОБРОЛАПКИ: 5% на первое размещение, до 01.11.2026 включительно"
+
+  # Подтверждённые владельцем проценты при размещении от 30 суток.
+  - id: long_stay_vip_2026
+    scope: discount
+    condition: {min_nights: 30, tariff_kinds: [vip, vip_plus], applies_to: accommodation}
+    percent: 20
+    priority: 20
+    stackable: true
+    active: true
+    description: "От 30 суток: VIP и VIP+ — 20%"
+  - id: long_stay_comfort_2026
+    scope: discount
+    condition: {min_nights: 30, tariff_kinds: [comfort, comfort_plus], applies_to: accommodation}
+    percent: 15
+    priority: 20
+    stackable: true
+    active: true
+    description: "От 30 суток: Комфорт и Комфорт+ — 15%"
+  - id: long_stay_outdoor_2026
+    scope: discount
+    condition: {min_nights: 30, tariff_kinds: [outdoor_comfort], applies_to: accommodation}
+    percent: 10
+    priority: 20
+    stackable: true
+    active: true
+    description: "От 30 суток: уличный вольер — 10%"
+  - id: long_stay_cage_economy_2026
+    scope: discount
+    condition: {min_nights: 30, tariff_kinds: [premium, standard_l, standard_m, optimal_s, economy], applies_to: accommodation}
+    percent: 5
+    priority: 20
+    stackable: true
+    active: true
+    description: "От 30 суток: клетка, вольер или Эконом — 5%"
 
   - id: promo_5pct_2026
     scope: discount

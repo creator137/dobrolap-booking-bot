@@ -199,6 +199,8 @@ class BookingService:
         arrival_time: str | None = None,
         service_details: dict[str, Any] | None = None,
         review_discount_claim: bool = False,
+        review_proof_file_id: str | None = None,
+        review_proof_is_document: bool = False,
     ) -> tuple[BookingRecord, PriceQuote | None]:
         customer_id = await self.repo.upsert_customer(
             telegram_user_id=telegram_user_id,
@@ -240,6 +242,9 @@ class BookingService:
                 promo_at=promo_at,
                 arrival_time=arrival_time,
             )
+            if review_discount_claim:
+                quote.provisional = True
+                quote.explanation += " Скидка за отзыв и окончательная стоимость — после проверки оператором."
 
         now = _utcnow()
         booking_id = uuid.uuid4().hex[:12]
@@ -252,6 +257,8 @@ class BookingService:
             "manual_matching": manual_matching,
             "promo_code": promo_code,
             "review_discount_claim": review_discount_claim,
+            "review_proof_file_id": review_proof_file_id,
+            "review_proof_is_document": review_proof_is_document,
             "promo_rule_id": promo_rule.id if promo_rule else None,
             "promo_at": promo_at.isoformat() if promo_rule else None,
             "requested_sheet_label": requested_sheet_label,

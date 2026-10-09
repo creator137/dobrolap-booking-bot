@@ -79,7 +79,7 @@ REVIEW_AND_VOLUNTEER_INFO = (
     "\n\nАкция за отзывы: 5% за отзыв, 10% за отзыв с фото питомца, "
     "15% за отзывы на двух разных площадках. Скидка действует на одну передержку "
     "до 31 дня; повторно — за отзыв на новой площадке. Максимум по акции за отзывы — 25%. "
-    "Чтобы заявить скидку, отправьте слово «Отзыв»; подтверждение проверит оператор.\n"
+    "Чтобы заявить скидку, отправьте скриншот отзыва (фото или документ) либо слово «Отзыв» — бот попросит скриншот. Окончательную цену после проверки определит оператор. Можно сочетать не более двух акций.\n"
     "Если вы волонтёр — оставьте заявку, оператор свяжется с вами для уточнения "
     "условий и расчёта льготной стоимости."
 )
@@ -1117,9 +1117,11 @@ async def set_promo(
     text = (message.text or "").strip()
     review_claim = text.lower() in {"отзыв", "акция за отзыв", "скидка за отзыв"}
     if review_claim:
-        await state.update_data(review_discount_claim=True, promo_code=None, promo_verified=False)
-        await message.answer("Отметил запрос скидки за отзыв. Оператор проверит отзыв и площадку.")
-        await _show_summary_message(message, state, catalog)
+        await state.set_state(BookingForm.review_proof)
+        await message.answer("Пришлите скриншот отзыва фото или документом. Оператор проверит площадку и определит окончательную стоимость.")
+        return
+    if message.photo or message.document:
+        await _save_review_proof(message, state, catalog)
         return
     promo = None if text.lower() in {"нет", "-", "нет промокода"} else text.strip().upper()
     if promo:
@@ -1143,10 +1145,34 @@ async def set_promo(
                 "Если это ошибка, сообщите владельцу; продолжить можно без промокода."
             )
             return
-        await message.answer("Промокод принят — скидка появится в расчёте.")
+        await message.answer("Промокод принят. Если есть отзыв, пришлите его скриншот после предварительного расчёта; оператор проверит сочетание скидок.")
     await state.update_data(promo_code=promo, promo_verified=bool(promo))
     # Build a fake callback-like summary via helper
     await _show_summary_message(message, state, catalog)
+
+
+async def _save_review_proof(message: Message, state: FSMContext, catalog: Catalog) -> None:
+    file_id = message.photo[-1].file_id if message.photo else (message.document.file_id if message.document else None)
+    if not file_id:
+        await message.answer("Пришлите скриншот отзыва фото или документом.")
+        return
+    await state.update_data(
+        review_discount_claim=True,
+        review_proof_file_id=file_id,
+        review_proof_is_document=bool(message.document),
+    )
+    await message.answer("Скриншот приложен. Оператор проверит отзыв и окончательную стоимость.")
+    await _show_summary_message(message, state, catalog)
+
+
+@router.message(BookingForm.review_proof)
+async def set_review_proof(message: Message, state: FSMContext, catalog: Catalog) -> None:
+    await _save_review_proof(message, state, catalog)
+
+
+@router.message(BookingForm.confirm_submit, F.photo | F.document)
+async def add_review_proof_to_summary(message: Message, state: FSMContext, catalog: Catalog) -> None:
+    await _save_review_proof(message, state, catalog)
 
 
 async def _show_summary_message(message: Message, state: FSMContext, catalog: Catalog) -> None:
@@ -1172,6 +1198,9 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
                 promo_eligible=bool(data.get("promo_verified")),
                 arrival_time=data.get("arrival_time"),
             )
+            if data.get("review_discount_claim"):
+                quote.provisional = True
+                quote.explanation += " Скидка за отзыв и окончательная стоимость — после проверки оператором."
             await state.update_data(
                 price_total=(
                     quote.total_rub if quote.has_accommodation_amount else None
@@ -1231,6 +1260,8 @@ async def submit_yes(
                 }.items() if value
             },
             review_discount_claim=bool(data.get("review_discount_claim")),
+            review_proof_file_id=data.get("review_proof_file_id"),
+            review_proof_is_document=bool(data.get("review_proof_is_document")),
         )
     except SheetsUnavailableError:
         logger.exception("booking submit failed: Sheets unavailable")
@@ -1280,6 +1311,16 @@ async def submit_yes(
                     )
                 except Exception:
                     pass
+        proof_id = booking.payload.get("review_proof_file_id")
+        if proof_id:
+            try:
+                caption = f"Скриншот отзыва / заявка {booking.id}; проверьте площадку и скидку"
+                if booking.payload.get("review_proof_is_document"):
+                    await callback.bot.send_document(owner_chat_id, proof_id, caption=caption)
+                else:
+                    await callback.bot.send_photo(owner_chat_id, proof_id, caption=caption)
+            except Exception:
+                logger.exception("Could not forward review proof for booking %s", booking.id)
         await callback.message.answer(
             f"Заявка №{booking.id} отправлена владельцу.\n"
             "Ожидайте решения. Реквизиты придут только после подтверждения.\n"

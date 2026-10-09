@@ -121,6 +121,39 @@ async def test_economy_cat_receives_both_provided_views():
     assert any("22-economy-cat-empty.png" in path for path in paths)
 
 
+@pytest.mark.asyncio
+async def test_new_s_l_and_a_plus_a_photos_match_suitable_units():
+    cases = [
+        ("optimal_s", PetKind.DOG, 6, "26-optimal-s.png"),
+        ("standard_l", PetKind.DOG, 18, "27-standard-l-dog.png"),
+        ("second_floor_a_plus_a", PetKind.CAT, None, "31-second-floor-a-plus-a.png"),
+    ]
+    for unit_id, kind, weight, expected in cases:
+        catalog = one_unit_catalog(unit_id)
+        sheets = InMemorySheetsGateway()
+        service = BookingService(repo=None, catalog=catalog, sheets=sheets)
+        message, state = FakeMessage(), FakeState(PetProfile(kind=kind, name="Питомец", weight_kg=weight, vaccinated=True, parasite_treated=True))
+        await _run_placement(message, state, catalog, sheets, service, ROOT / "assets")
+        paths = [str(item.media.path) for group in message.media for item in group]
+        assert any(expected in path for path in paths), (unit_id, paths)
+
+
+@pytest.mark.asyncio
+async def test_outdoor_category_photos_are_shown_for_each_free_outdoor_unit():
+    catalog = one_unit_catalog("outdoor_comfort")
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=15, vaccinated=True, parasite_treated=True)
+    labels = catalog.get_accommodation("outdoor_comfort").calendar_labels()
+    for free_label in labels:
+        rows = [SheetBooking(f"occupied-{i}", label, date(2026, 11, 10), date(2026, 11, 12), "CONFIRMED") for i, label in enumerate(labels) if label != free_label]
+        sheets = InMemorySheetsGateway(rows)
+        service = BookingService(repo=None, catalog=catalog, sheets=sheets)
+        message, state = FakeMessage(), FakeState(pet)
+        await _run_placement(message, state, catalog, sheets, service, ROOT / "assets")
+        paths = [str(item.media.path) for group in message.media for item in group]
+        assert state.data["offered_sheet_labels"]["outdoor_comfort"] == free_label
+        assert all(any(f"{number}-outdoor-" in path for path in paths) for number in ("28", "29", "30"))
+
+
 def test_all_catalog_photos_exist_and_uncertain_images_are_not_shown():
     catalog = load_catalog(ROOT / "config")
     all_paths = []

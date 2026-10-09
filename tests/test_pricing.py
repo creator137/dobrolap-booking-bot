@@ -180,6 +180,51 @@ def test_group_price_applies_confirmed_fifty_percent_discount(pricing, catalog):
     assert "50%" in quote.explanation
 
 
+@pytest.mark.parametrize("unit_id,expected_percent", [
+    ("second_floor_a_plus_a", 20),
+    ("seasonal_vip_under_stairs", 20),
+    ("comfort", 15),
+    ("comfort_plus", 15),
+    ("outdoor_comfort", 10),
+    ("standard_l", 5),
+    ("economy", 5),
+])
+def test_long_stay_discount_starts_at_thirty_days(pricing, catalog, unit_id, expected_percent):
+    pet = PetProfile(kind=PetKind.CAT if unit_id == "economy" else PetKind.DOG,
+                     name="Питомец", weight_kg=None if unit_id == "economy" else 15)
+    unit = catalog.get_accommodation(unit_id)
+    start = date(2026, 11, 10)
+    short = pricing.quote(pets=[pet], unit=unit, date_from=start, date_to=date(2026, 12, 9))
+    long = pricing.quote(pets=[pet], unit=unit, date_from=start, date_to=date(2026, 12, 10))
+    assert not any("long_stay" in (line.detail or "") for line in short.lines)
+    discount = next(line for line in long.lines if "long_stay" in (line.detail or ""))
+    base = sum(line.amount_rub for line in long.lines if line.scope == PriceScope.ACCOMMODATION)
+    assert discount.amount_rub == -round(base * expected_percent / 100)
+
+
+def test_promo_and_long_stay_are_two_actions_and_review_remains_manual(pricing, catalog):
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6)
+    quote = pricing.quote(pets=[pet], unit=catalog.get_accommodation("comfort"),
+                          date_from=date(2026, 10, 1), date_to=date(2026, 10, 31),
+                          promo_code="ДОБРОЛАПКИ", promo_eligible=True,
+                          promo_at=date(2026, 10, 9))
+    discounts = [line for line in quote.lines if line.scope == PriceScope.DISCOUNT]
+    assert len(discounts) == 2
+    assert sum(line.amount_rub for line in discounts) == -round(1900 * 30 * 0.20)
+
+
+def test_second_pet_promo_long_stay_needs_operator_review(pricing, catalog):
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6)
+    quote = pricing.quote(pets=[pet, pet.model_copy(update={"name": "Другой"})],
+                          unit=catalog.get_accommodation("comfort"),
+                          date_from=date(2026, 10, 1), date_to=date(2026, 10, 31),
+                          promo_code="ДОБРОЛАПКИ", promo_eligible=True,
+                          promo_at=date(2026, 10, 9))
+    assert quote.provisional
+    assert len([line for line in quote.lines if "rule:" in (line.detail or "")]) == 1
+    assert "не более двух акций" in quote.explanation
+
+
 def test_separate_kitchen_room_is_vip_minus_250(pricing, catalog):
     pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6)
     quote = pricing.quote(

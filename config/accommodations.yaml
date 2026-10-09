@@ -59,6 +59,7 @@ accommodations:
       - assets/rooms/14-comfort-group-3.jpg
       - assets/rooms/15-comfort-group-4.jpg
       - assets/rooms/07-comfort-area-overview.jpg
+    notes: "Все три комнаты Комфорт одинаковые; фото показывают этот тип помещения"
 
   - id: premium_xxl
     name: "Премиум (усиленная клетка XXL)"
@@ -79,6 +80,9 @@ accommodations:
     tariff_kind: standard_l
     allowed_species: [dog, cat]
     features: [enclosure]
+    photo_paths_by_species:
+      dog:
+        - assets/rooms/27-standard-l-dog.png
 
   - id: standard_m
     name: "Стандарт M"
@@ -103,6 +107,8 @@ accommodations:
     allowed_species: [dog, cat]
     weight_max_kg: 10
     features: [enclosure]
+    photo_paths:
+      - assets/rooms/26-optimal-s.png
 
   - id: economy
     name: "Эконом"
@@ -125,6 +131,10 @@ accommodations:
     allowed_species: [dog]
     weight_min_kg: 10
     features: [outdoor]
+    photo_paths:
+      - assets/rooms/28-outdoor-building.png
+      - assets/rooms/29-outdoor-interior.png
+      - assets/rooms/30-outdoor-overview.png
     photo_paths_by_sheet_label:
       "Уличный Вольер Комфорт для собак 2":
         - assets/rooms/23-outdoor-enclosure-2.png
@@ -193,7 +203,9 @@ accommodations:
     allowed_species: [dog, cat]
     features: [indoor, private, vip]
     priority_tags: [vip]
-    notes: "Отдельная ВИП+ комната из календаря; фото А+А не подтверждено владельцем"
+    photo_paths:
+      - assets/rooms/31-second-floor-a-plus-a.png
+    notes: "Отдельная ВИП+ комната из календаря; фото подтверждено владельцем"
 
   - id: second_floor_hall
     name: "2 этаж, зал"

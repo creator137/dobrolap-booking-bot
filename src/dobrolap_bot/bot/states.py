@@ -26,6 +26,7 @@ class BookingForm(StatesGroup):
     services = State()
     taxi_address = State()
     promo = State()
+    review_proof = State()
     confirm_submit = State()
     waiting_receipt = State()
     reply_to_owner = State()

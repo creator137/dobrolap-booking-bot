@@ -198,8 +198,14 @@ class PricingService:
             on_date=promo_at or self.promo_today(),
             promo_code=promo_code,
             promo_eligible=promo_eligible,
+            nights=nights,
+            tariff_kind=unit.tariff_kind,
+            max_actions=1 if len(pets) > 1 else 2,
         )
         lines.extend(discount_lines)
+        if len(pets) > 1 and promo_eligible and nights >= 30:
+            provisional = True
+            notes.append("При сочетании скидки на питомцев, промокода и длительного размещения окончательную сумму определит оператор: не более двух акций.")
 
         total = sum(ln.amount_rub for ln in lines)
         deposit = self.deposit_amount(len(pets))
@@ -287,6 +293,9 @@ class PricingService:
         on_date: date,
         promo_code: str | None,
         promo_eligible: bool,
+        nights: int,
+        tariff_kind: str,
+        max_actions: int,
     ) -> list[QuoteLine]:
         lines: list[QuoteLine] = []
         rules = sorted(
@@ -298,19 +307,24 @@ class PricingService:
             self.find_active_promo(promo_code, on_date=on_date)
             if promo_code and promo_eligible else None
         )
-        if promo_rule is not None:
-            # A non-stackable promo excludes every other discount.
-            rules = [promo_rule]
         for rule in rules:
-            if applied_non_stackable and not rule.stackable:
+            if len(lines) >= max_actions or applied_non_stackable:
+                continue
+            if lines and not rule.stackable:
                 continue
             if rule.date_from and on_date < rule.date_from:
                 continue
             if rule.date_to and on_date > rule.date_to:
                 continue
+            min_nights = rule.condition.get("min_nights")
+            if min_nights is not None and nights < int(min_nights):
+                continue
+            tariff_kinds = rule.condition.get("tariff_kinds")
+            if tariff_kinds and tariff_kind not in tariff_kinds:
+                continue
             code = rule.condition.get("promo_code")
             if code:
-                if not promo_eligible or not promo_code or promo_code.strip().upper() != str(code).upper():
+                if rule is not promo_rule:
                     continue
             amount = 0
             if rule.percent is not None:
