@@ -50,6 +50,15 @@ class InvalidTransitionError(ValueError):
     pass
 
 
+def calendar_note_for_booking(booking: BookingRecord) -> str | None:
+    names: list[str] = []
+    for pet in booking.payload.get("pets") or []:
+        name = str((pet or {}).get("name") or "").strip()
+        if name:
+            names.append(name)
+    return ", ".join(names) if names else None
+
+
 def can_transition(current: BookingStatus, new: BookingStatus) -> bool:
     if current == new:
         return True
@@ -377,6 +386,7 @@ class BookingService:
                 date_from=booking.date_from,
                 date_to=booking.date_to,
                 status=BookingStatus.WAITING_PAYMENT.value,
+                note=calendar_note_for_booking(booking),
             )
         except ValueError as exc:
             if "unit_occupied" in str(exc):
@@ -483,6 +493,7 @@ class BookingService:
                     date_from=booking.date_from,
                     date_to=booking.date_to,
                     status=original_status.value,
+                    note=calendar_note_for_booking(booking),
                 )
             raise
         return booking
@@ -542,6 +553,7 @@ class BookingService:
                         date_from=booking.date_from,
                         date_to=booking.date_to,
                         status=BookingStatus.WAITING_PAYMENT.value,
+                        note=calendar_note_for_booking(booking),
                     )
                 raise
 
@@ -643,6 +655,7 @@ class BookingService:
                     date_from=booking.date_from,
                     date_to=booking.date_to,
                     status=BookingStatus.WAITING_PAYMENT.value,
+                    note=calendar_note_for_booking(booking),
                 )
             raise
         return booking, quote
@@ -672,9 +685,10 @@ class BookingService:
             raise InvalidTransitionError(f"{booking.status} → CONFIRMED is not allowed")
         if not booking.unit_id or not booking.payload.get("sheet_label"):
             raise ValueError("unit_required")
+        # The owner may mark the deposit as received even without a client
+        # receipt (cash, transfer seen in the bank app, etc.).
         receipts = list(booking.payload.get("receipt_file_ids") or [])
-        if not receipts:
-            raise ValueError("receipt_required")
+        manual = not receipts
         label = booking.payload["sheet_label"]
         self.sheets.reserve_booking(
             booking_id=booking.id,
@@ -682,8 +696,28 @@ class BookingService:
             date_from=booking.date_from,
             date_to=booking.date_to,
             status=BookingStatus.CONFIRMED.value,
+            note=calendar_note_for_booking(booking),
         )
-        booking.payload = {**booking.payload, "ever_confirmed": True}
+        payload = {
+            **booking.payload,
+            "ever_confirmed": True,
+            "payment": {
+                "marked_by": "owner",
+                "manual": manual,
+                "receipts": len(receipts),
+                "at": _utcnow().isoformat(),
+            },
+        }
+        if manual:
+            payload = self._append_audit(
+                payload,
+                action="payment_marked_manually",
+                from_status=BookingStatus.WAITING_PAYMENT.value,
+                to_status=BookingStatus.CONFIRMED.value,
+                actor="owner",
+                detail="no client receipt",
+            )
+        booking.payload = payload
         return await self._set_status(
             booking,
             BookingStatus.CONFIRMED,

@@ -31,6 +31,7 @@ class PlacementService:
         *,
         occupied_unit_ids: set[str] | None = None,
         limit: int = 5,
+        for_owner: bool = False,
     ) -> PlacementResult:
         occupied_unit_ids = occupied_unit_ids or set()
         owner_flags: list[str] = []
@@ -59,7 +60,11 @@ class PlacementService:
 
         per_pet: list[list[PlacementCandidate]] = []
         for pet in pets:
-            per_pet.append(self._candidates_for_pet(pet, occupied_unit_ids))
+            per_pet.append(
+                self._candidates_for_pet(
+                    pet, occupied_unit_ids, relax_hard_blocks=for_owner
+                )
+            )
 
         if not per_pet or any(not c for c in per_pet):
             return PlacementResult(
@@ -83,7 +88,7 @@ class PlacementService:
         merged: list[PlacementCandidate] = []
         for unit_id in common_ids:
             base = by_id[unit_id]
-            if requires_manual:
+            if requires_manual or for_owner:
                 base = base.model_copy(update={"requires_owner_review": True})
             merged.append(base)
 
@@ -117,13 +122,17 @@ class PlacementService:
         self,
         pet: PetProfile,
         occupied_unit_ids: set[str],
+        *,
+        relax_hard_blocks: bool = False,
     ) -> list[PlacementCandidate]:
-        # Untreated parasites → no automatic offer.
-        if pet.parasite_treated is False:
-            return []
-        if pet.kind == PetKind.DOG and self._dog_needs_manual(pet):
-            # Owner requires a separate room or an individual decision for these cases.
-            return []
+        # Untreated parasites / special dog cases → no automatic client offer.
+        # Owner picker may relax these so a room can still be assigned manually.
+        if not relax_hard_blocks:
+            if pet.parasite_treated is False:
+                return []
+            if pet.kind == PetKind.DOG and self._dog_needs_manual(pet):
+                # Owner requires a separate room or an individual decision for these cases.
+                return []
 
         out: list[PlacementCandidate] = []
         for unit in self.catalog.active_accommodations():
@@ -131,6 +140,8 @@ class PlacementService:
                 continue
             candidate = self._evaluate(pet, unit)
             if candidate is not None:
+                if relax_hard_blocks:
+                    candidate = candidate.model_copy(update={"requires_owner_review": True})
                 out.append(candidate)
         return out
 

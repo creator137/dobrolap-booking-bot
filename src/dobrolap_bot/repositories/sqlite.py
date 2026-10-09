@@ -354,6 +354,67 @@ class SqliteRepository:
         )
         return [self._from_row(row) for row in await cur.fetchall()]
 
+    async def list_bookings(
+        self,
+        *,
+        statuses: list[BookingStatus] | None = None,
+        limit: int = 30,
+    ) -> list[BookingRecord]:
+        sql = """
+            SELECT b.*, c.telegram_user_id AS customer_telegram_id,
+                   c.name AS customer_name, c.contact AS customer_contact
+            FROM bookings b
+            JOIN customers c ON c.id = b.customer_id
+        """
+        params: list = []
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            sql += f" WHERE b.status IN ({placeholders})"
+            params.extend(s.value for s in statuses)
+        sql += " ORDER BY b.updated_at DESC LIMIT ?"
+        params.append(limit)
+        cur = await self.db.execute(sql, params)
+        return [self._from_row(row) for row in await cur.fetchall()]
+
+    async def count_by_status(self) -> dict[str, int]:
+        cur = await self.db.execute(
+            "SELECT status, COUNT(*) AS n FROM bookings GROUP BY status"
+        )
+        return {str(row["status"]): int(row["n"]) for row in await cur.fetchall()}
+
+    async def list_customers(self, *, limit: int = 40) -> list[dict]:
+        cur = await self.db.execute(
+            """
+            SELECT
+                c.id,
+                c.telegram_user_id,
+                c.name,
+                c.contact,
+                COUNT(b.id) AS bookings_total,
+                SUM(CASE WHEN b.status IN (
+                    'WAITING_OWNER', 'OWNER_APPROVED', 'WAITING_PAYMENT', 'CONFIRMED'
+                ) THEN 1 ELSE 0 END) AS bookings_active
+            FROM customers c
+            LEFT JOIN bookings b ON b.customer_id = c.id
+            GROUP BY c.id
+            ORDER BY COALESCE(MAX(b.updated_at), c.consent_at, '') DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cur.fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "telegram_user_id": int(row["telegram_user_id"]),
+                "name": row["name"],
+                "contact": row["contact"],
+                "bookings_total": int(row["bookings_total"] or 0),
+                "bookings_active": int(row["bookings_active"] or 0),
+            }
+            for row in rows
+        ]
+
     def _from_row(self, row: aiosqlite.Row) -> BookingRecord:
         keys = row.keys()
 

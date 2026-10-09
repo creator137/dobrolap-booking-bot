@@ -47,6 +47,7 @@ class SheetsGateway(Protocol):
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
         """Atomically re-check availability and write the hold. Raises ValueError if busy."""
         ...
@@ -63,6 +64,7 @@ class SheetsGateway(Protocol):
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
         """Update mark/status; for cancel use release_booking when status is cancelled."""
         ...
@@ -102,6 +104,7 @@ class InMemorySheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
         occupied = self.occupied_unit_ids(
             date_from, date_to, exclude_booking_id=booking_id
@@ -114,6 +117,7 @@ class InMemorySheetsGateway:
             date_from=date_from,
             date_to=date_to,
             status=status,
+            note=note,
         )
 
     def release_booking(self, *, booking_id: str, unit_id: str | None = None) -> None:
@@ -129,7 +133,9 @@ class InMemorySheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
+        _ = note
         if status.upper() in {"CANCELLED", "REJECTED", "EXPIRED", "OWNER_REJECTED"}:
             self.release_booking(booking_id=booking_id, unit_id=unit_id)
             row = SheetBooking(booking_id, unit_id, date_from, date_to, status)
@@ -162,7 +168,9 @@ class DisabledSheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
+        _ = note
         return SheetBooking(booking_id, unit_id, date_from, date_to, status)
 
     def release_booking(self, *, booking_id: str, unit_id: str | None = None) -> None:
@@ -176,7 +184,9 @@ class DisabledSheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
+        _ = note
         return SheetBooking(booking_id, unit_id, date_from, date_to, status)
 
 
@@ -211,7 +221,9 @@ class UnavailableSheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
+        _ = note
         self._boom()
         raise SheetsUnavailableError(self.reason)
 
@@ -226,6 +238,8 @@ class UnavailableSheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
+        _ = note
         self._boom()
         raise SheetsUnavailableError(self.reason)

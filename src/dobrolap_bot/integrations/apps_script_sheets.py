@@ -100,6 +100,7 @@ class AppsScriptSheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
         booking = {
             "external_id": booking_id,
@@ -107,6 +108,7 @@ class AppsScriptSheetsGateway:
             "date_from": date_from.isoformat(),
             "date_to": date_to.isoformat(),
             "status": status,
+            "note": note or "",
         }
         self._post({"action": "reserve", "booking": booking})
         return SheetBooking(
@@ -128,6 +130,7 @@ class AppsScriptSheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
         if status.upper() in {"CANCELLED", "REJECTED", "EXPIRED", "OWNER_REJECTED"}:
             self.release_booking(booking_id=booking_id, unit_id=unit_id)
@@ -138,6 +141,7 @@ class AppsScriptSheetsGateway:
             date_from=date_from,
             date_to=date_to,
             status=status,
+            note=note,
         )
 
 

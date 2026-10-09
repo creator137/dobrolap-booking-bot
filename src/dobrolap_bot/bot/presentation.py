@@ -67,6 +67,7 @@ PLACEMENT_FLAG_LABELS = {
     "needs_review:health_notes": "указаны особенности здоровья",
     "needs_review:behavior_notes": "поведение описано свободным текстом — проверьте исходное описание",
     "sheets_unavailable": "календарь Google Sheets был недоступен — свободное место не проверено",
+    "calendar_dates_missing": "в календаре нет столбцов на выбранные даты — свободное место не проверено",
     "arrival_price_review": "время заезда требует ручного расчёта доплаты",
 }
 
@@ -349,3 +350,107 @@ def format_draft_summary(
     if data.get("service_ids"):
         lines.append("Стоимость дополнительных услуг сообщит оператор отдельно.")
     return "\n".join(lines)
+
+
+SHORT_STATUS_LABELS = {
+    BookingStatus.DRAFT: "черновик",
+    BookingStatus.WAITING_OWNER: "ждёт решения",
+    BookingStatus.OWNER_APPROVED: "одобрена",
+    BookingStatus.WAITING_PAYMENT: "ждёт оплату",
+    BookingStatus.CONFIRMED: "подтверждена",
+    BookingStatus.OWNER_REJECTED: "отклонена",
+    BookingStatus.CANCELLED: "отменена",
+    BookingStatus.EXPIRED: "истекла",
+}
+
+
+def short_status_label(status: BookingStatus | str | None) -> str:
+    try:
+        normalized = status if isinstance(status, BookingStatus) else BookingStatus(str(status))
+    except ValueError:
+        return str(status or "?")
+    return SHORT_STATUS_LABELS.get(normalized, status_label(normalized))
+
+
+def _pet_names(booking: BookingRecord) -> str:
+    names = []
+    for raw in booking.payload.get("pets") or []:
+        name = str((raw or {}).get("name") or "").strip()
+        if name:
+            names.append(name)
+    return ", ".join(names) if names else "—"
+
+
+def format_admin_overview(counts: dict[str, int]) -> str:
+    pending = counts.get(BookingStatus.WAITING_OWNER.value, 0)
+    unpaid = counts.get(BookingStatus.WAITING_PAYMENT.value, 0)
+    confirmed = counts.get(BookingStatus.CONFIRMED.value, 0)
+    cancelled = counts.get(BookingStatus.CANCELLED.value, 0)
+    expired = counts.get(BookingStatus.EXPIRED.value, 0)
+    rejected = counts.get(BookingStatus.OWNER_REJECTED.value, 0)
+    total = sum(counts.values())
+    return "\n".join(
+        [
+            "📋 Админка Добролап",
+            "",
+            f"Всего заявок в базе: {total}",
+            f"⏳ Ждут вашего решения: {pending}",
+            f"💳 Ждут оплату залога: {unpaid}",
+            f"✅ Подтверждённые брони: {confirmed}",
+            f"❌ Отменены / отклонены / истекли: {cancelled + rejected + expired}",
+            "",
+            "Выберите раздел кнопками ниже.",
+        ]
+    )
+
+
+def format_admin_booking_line(booking: BookingRecord, catalog: Catalog) -> str:
+    unit = catalog.get_accommodation(booking.unit_id) if booking.unit_id else None
+    unit_name = unit.name if unit else (booking.unit_id or "без помещения")
+    client = booking.customer_name or booking.customer_contact or "клиент"
+    hold = ""
+    if booking.status == BookingStatus.WAITING_PAYMENT and booking.hold_expires_at:
+        hold = f", оплатить до {format_datetime(booking.hold_expires_at)}"
+    return (
+        f"• #{booking.id[:8]} · {short_status_label(booking.status)}\n"
+        f"  {format_date(booking.date_from)}–{format_date(booking.date_to)} · {unit_name}\n"
+        f"  {client} · {_pet_names(booking)} · залог {format_money(booking.deposit_amount)}{hold}"
+    )
+
+
+def format_admin_bookings_list(
+    title: str,
+    bookings: list[BookingRecord],
+    catalog: Catalog,
+    *,
+    empty_text: str,
+) -> str:
+    if not bookings:
+        return f"{title}\n\n{empty_text}"
+    lines = [title, ""]
+    for booking in bookings:
+        lines.append(format_admin_booking_line(booking, catalog))
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def format_admin_clients(clients: list[dict]) -> str:
+    if not clients:
+        return "👥 Клиенты\n\nПока нет клиентов в базе."
+    lines = ["👥 Клиенты", ""]
+    for item in clients:
+        name = item.get("name") or "Без имени"
+        contact = item.get("contact") or "телефон не указан"
+        tg = item.get("telegram_user_id")
+        lines.append(
+            f"• {name} · {contact}\n"
+            f"  tg:{tg} · заявок {item.get('bookings_total', 0)}"
+            f" (активных {item.get('bookings_active', 0)})"
+        )
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def admin_booking_button_title(booking: BookingRecord) -> str:
+    client = booking.customer_name or booking.customer_contact or _pet_names(booking)
+    return f"{booking.id[:8]} · {format_date(booking.date_from)} · {client}"[:64]

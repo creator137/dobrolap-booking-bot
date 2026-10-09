@@ -67,6 +67,7 @@ def test_all_public_labels_are_russian():
     assert pet_kind_label(PetKind.DOG) == "Собака"
     assert feeding_label(FeedingOption.HOTEL_RATION) == "Рацион зоогостиницы"
     assert "Google Sheets" in placement_flag_label("sheets_unavailable")
+    assert "нет столбцов" in placement_flag_label("calendar_dates_missing")
 
 
 def test_owner_card_is_complete_and_hides_internal_values():

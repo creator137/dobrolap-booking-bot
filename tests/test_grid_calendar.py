@@ -6,11 +6,21 @@ import pytest
 
 from dobrolap_bot.integrations.grid_calendar import (
     build_room_label,
+    calendar_cell_mark,
     date_columns,
+    extract_booking_id,
     iter_room_rows,
     parse_header_date,
     require_complete_date_range,
 )
+
+
+def test_human_calendar_mark_keeps_booking_id():
+    mark = calendar_cell_mark("WAITING_PAYMENT", "abc123", "Бобик")
+    assert mark == "резерв до оплаты Бобик · бот #abc123"
+    assert extract_booking_id(mark) == "abc123"
+    assert extract_booking_id("CONFIRMED:abc123") == "abc123"
+    assert calendar_cell_mark("CONFIRMED", "abc123") == "бронь · бот #abc123"
 
 
 def test_parse_sheets_serial():

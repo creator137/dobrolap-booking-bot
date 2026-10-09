@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from dobrolap_bot.bot.helpers import (
 )
 from dobrolap_bot.bot.keyboards import (
     add_pet_kb,
+    arrival_time_kb,
     behavior_kb,
     behavior_options,
     consent_kb,
@@ -75,6 +77,11 @@ from dobrolap_bot.services.summary import format_client_status, format_owner_sum
 
 router = Router(name="client")
 logger = logging.getLogger(__name__)
+
+# Telegram albums arrive as concurrent updates; buffer them so FSM doesn't drop photos.
+_passport_album_buffers: dict[str, list[str]] = {}
+_passport_album_tasks: dict[str, asyncio.Task] = {}
+
 REVIEW_AND_VOLUNTEER_INFO = (
     "\n\nАкция за отзывы: 5% за отзыв, 10% за отзыв с фото питомца, "
     "15% за отзывы на двух разных площадках. Скидка действует на одну передержку "
@@ -235,21 +242,19 @@ async def _finish_dates(message: Message, state: FSMContext, date_from: date, da
     await state.set_state(BookingForm.arrival_time)
     await message.answer(
         f"Даты: {date_from.strftime('%d.%m.%Y')} → {date_to.strftime('%d.%m.%Y')}\n"
-        "Во сколько планируете приехать? Напишите время, например: 19:30.\n\n"
+        "Во сколько планируете приехать? Выберите кнопку или введите время, например: 19:30.\n\n"
         + ARRIVAL_RULES_TEXT,
+        reply_markup=arrival_time_kb(),
     )
 
 
-@router.message(BookingForm.arrival_time)
-async def set_arrival_time(message: Message, state: FSMContext) -> None:
-    arrival = parse_time(message.text or "")
-    if arrival is None:
-        await message.answer("Не разобрал время. Напишите в формате ЧЧ:ММ, например: 19:30.")
-        return
+async def _apply_arrival_time(message: Message, state: FSMContext, arrival) -> None:
     data = await state.get_data()
     flags = set(data.get("placement_flags") or [])
     if arrival_requires_price_review(arrival):
         flags.add("arrival_price_review")
+    else:
+        flags.discard("arrival_price_review")
     await state.update_data(
         arrival_time=arrival.strftime("%H:%M"),
         arrival_price_notice=arrival_price_notice(arrival),
@@ -262,6 +267,48 @@ async def set_arrival_time(message: Message, state: FSMContext) -> None:
         "Кто ваш питомец?",
         reply_markup=pet_kind_kb(),
     )
+
+
+@router.callback_query(BookingForm.arrival_time, F.data == "arr:noop")
+async def arrival_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.callback_query(BookingForm.arrival_time, F.data == "arr:text")
+async def arrival_ask_text(callback: CallbackQuery) -> None:
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer("Напишите время заезда в формате ЧЧ:ММ, например: 19:30.")
+    await callback.answer()
+
+
+@router.callback_query(BookingForm.arrival_time, F.data.startswith("arr:"))
+async def arrival_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    raw = (callback.data or "").removeprefix("arr:")
+    arrival = parse_time(raw)
+    if arrival is None:
+        await callback.answer("Некорректное время", show_alert=True)
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.answer(f"Заезд {arrival.strftime('%H:%M')}")
+    await _apply_arrival_time(callback.message, state, arrival)
+
+
+@router.message(BookingForm.arrival_time)
+async def set_arrival_time(message: Message, state: FSMContext) -> None:
+    arrival = parse_time(message.text or "")
+    if arrival is None:
+        await message.answer(
+            "Не разобрал время. Выберите кнопку или напишите ЧЧ:ММ, например: 19:30.",
+            reply_markup=arrival_time_kb(),
+        )
+        return
+    await _apply_arrival_time(message, state, arrival)
 
 
 @router.callback_query(BookingForm.consent, F.data == "consent:yes")
@@ -784,16 +831,48 @@ async def review_health(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.message(BookingForm.pet_passport, F.photo)
-async def passport_photo(message: Message, state: FSMContext) -> None:
+async def _append_passport_photos(
+    message: Message, state: FSMContext, file_ids: list[str]
+) -> None:
     data = await state.get_data()
     files = list(data.get("draft_passport_ids") or [])
-    files.append(message.photo[-1].file_id)
+    for file_id in file_ids:
+        if file_id and file_id not in files:
+            files.append(file_id)
     await state.update_data(draft_passport_ids=files)
     await message.answer(
         f"Фото сохранено ({len(files)}). Ещё фото или «Готово».",
         reply_markup=passport_kb(),
     )
+
+
+@router.message(BookingForm.pet_passport, F.photo)
+async def passport_photo(message: Message, state: FSMContext) -> None:
+    file_id = message.photo[-1].file_id
+    group_id = message.media_group_id
+    if not group_id:
+        await _append_passport_photos(message, state, [file_id])
+        return
+
+    # Album: wait until Telegram finishes delivering the whole media group.
+    key = f"{message.chat.id}:{group_id}"
+    _passport_album_buffers.setdefault(key, []).append(file_id)
+    previous = _passport_album_tasks.get(key)
+    if previous is not None:
+        previous.cancel()
+
+    async def _flush_album() -> None:
+        try:
+            await asyncio.sleep(0.8)
+        except asyncio.CancelledError:
+            return
+        ids = _passport_album_buffers.pop(key, [])
+        _passport_album_tasks.pop(key, None)
+        if not ids:
+            return
+        await _append_passport_photos(message, state, ids)
+
+    _passport_album_tasks[key] = asyncio.create_task(_flush_album())
 
 
 @router.message(BookingForm.pet_passport)
@@ -859,21 +938,28 @@ async def _run_placement(
 
     try:
         occupied = booking_service.occupied_catalog_ids(date_from, date_to)
-    except SheetsUnavailableError:
+    except SheetsUnavailableError as exc:
         logger.exception(
             "availability check failed date_from=%s date_to=%s", date_from, date_to
         )
-        flags = sorted(set(data.get("placement_flags") or []) | {"sheets_unavailable"})
+        incomplete = "calendar_date_range_incomplete" in str(exc)
+        flag = "calendar_dates_missing" if incomplete else "sheets_unavailable"
+        flags = sorted(set(data.get("placement_flags") or []) | {flag})
         await state.update_data(unit_id=None, manual_matching=True, placement_flags=flags)
         await state.set_state(BookingForm.feeding)
-        await message.answer(
-            "Календарь занятости сейчас недоступен — не могу показать свободные места.\n"
-            "Заявку отправлю владельцу на ручной подбор.\n\nКак будем кормить?",
-            reply_markup=feeding_kb(),
-        )
-        if message.bot:
-            # owner notified later on submit; flag is enough
-            pass
+        if incomplete:
+            client_text = (
+                f"В календаре занятости нет столбцов на даты "
+                f"{date_from.strftime('%d.%m.%Y')}–{date_to.strftime('%d.%m.%Y')}.\n"
+                "Свободное место проверить нельзя — заявку отправлю владельцу на ручной подбор.\n\n"
+                "Как будем кормить?"
+            )
+        else:
+            client_text = (
+                "Календарь занятости сейчас недоступен — не могу показать свободные места.\n"
+                "Заявку отправлю владельцу на ручной подбор.\n\nКак будем кормить?"
+            )
+        await message.answer(client_text, reply_markup=feeding_kb())
         return
 
     result = PlacementService(catalog).suggest(pets, occupied_unit_ids=occupied)
@@ -946,18 +1032,27 @@ async def _run_placement(
             if resolved:
                 photos.append(resolved)
         if photos:
-            media = []
-            for idx, photo_path in enumerate(photos):
-                media.append(
-                    InputMediaPhoto(
-                        media=FSInputFile(photo_path),
-                        caption=caption if idx == 0 else None,
-                    )
+            media = [
+                InputMediaPhoto(
+                    media=FSInputFile(photo_path),
+                    caption=caption if idx == 0 else None,
                 )
+                for idx, photo_path in enumerate(photos)
+            ]
             try:
                 await message.answer_media_group(media)
             except Exception:
+                logger.exception(
+                    "media group failed for unit=%s photos=%s; sending one by one",
+                    acc.id,
+                    [str(p) for p in photos],
+                )
                 await message.answer(caption)
+                for photo_path in photos:
+                    try:
+                        await message.answer_photo(FSInputFile(photo_path))
+                    except Exception:
+                        logger.exception("single photo failed path=%s", photo_path)
         else:
             await message.answer(caption)
 
@@ -1299,18 +1394,39 @@ async def submit_yes(
         await callback.bot.send_message(
             owner_chat_id,
             summary,
-            reply_markup=owner_actions_kb(booking.id),
+            reply_markup=owner_actions_kb(booking.id, has_unit=bool(booking.unit_id)),
         )
         for pet in pets:
-            for file_id in pet.passport_file_ids:
-                try:
-                    await callback.bot.send_photo(
-                        owner_chat_id,
-                        file_id,
-                        caption=f"Паспорт: {pet.name} / заявка {booking.id}",
-                    )
-                except Exception:
-                    pass
+            ids = list(pet.passport_file_ids or [])
+            if not ids:
+                continue
+            caption = f"Паспорт: {pet.name} / заявка {booking.id} ({len(ids)} фото)"
+            try:
+                if len(ids) == 1:
+                    await callback.bot.send_photo(owner_chat_id, ids[0], caption=caption)
+                else:
+                    media = [
+                        InputMediaPhoto(media=fid, caption=caption if i == 0 else None)
+                        for i, fid in enumerate(ids[:10])
+                    ]
+                    await callback.bot.send_media_group(owner_chat_id, media=media)
+                    for fid in ids[10:]:
+                        await callback.bot.send_photo(owner_chat_id, fid)
+            except Exception:
+                logger.exception(
+                    "Could not forward passport photos for booking %s pet %s",
+                    booking.id,
+                    pet.name,
+                )
+                for fid in ids:
+                    try:
+                        await callback.bot.send_photo(
+                            owner_chat_id,
+                            fid,
+                            caption=caption,
+                        )
+                    except Exception:
+                        logger.exception("passport photo forward failed file_id=%s", fid)
         proof_id = booking.payload.get("review_proof_file_id")
         if proof_id:
             try:
@@ -1528,10 +1644,13 @@ async def client_reply_send(
         return
     await booking_service.add_client_reply(booking_id, text)
     if owner_chat_id and message.bot:
+        booking = await booking_service.get(booking_id)
         await message.bot.send_message(
             owner_chat_id,
             f"💬 Ответ клиента по заявке {booking_id}:\n{text}",
-            reply_markup=owner_actions_kb(booking_id),
+            reply_markup=owner_actions_kb(
+                booking_id, has_unit=bool(booking and booking.unit_id)
+            ),
         )
     await message.answer("Ответ отправил владельцу.")
     await state.clear()

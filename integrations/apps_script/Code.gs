@@ -116,7 +116,7 @@ function reserve_(booking) {
     var unitId = String(booking.unit_id || "").trim();
     var dateFrom = String(booking.date_from || "").trim();
     var dateTo = String(booking.date_to || "").trim();
-    var mark = String(booking.status || "HOLD") + ":" + externalId;
+    var mark = calendarMark_(booking.status || "HOLD", externalId, booking.note || "");
     if (!externalId || !unitId || !dateFrom || !dateTo) {
       throw new Error("reserve requires external_id, unit_id, date_from, date_to");
     }
@@ -273,10 +273,25 @@ function isOccupiedCell_(cell, excludeBookingId) {
   return true;
 }
 
+function calendarMark_(status, bookingId, note) {
+  var map = {
+    HOLD: "резерв",
+    OWNER_APPROVED: "резерв",
+    WAITING_PAYMENT: "резерв до оплаты",
+    CONFIRMED: "бронь",
+  };
+  var key = String(status || "").toUpperCase();
+  var label = map[key] || String(status || "резерв");
+  var notePart = String(note || "").trim();
+  return label + (notePart ? " " + notePart : "") + " · бот #" + bookingId;
+}
+
 function extractBookingId_(cell) {
   if (cell === "" || cell === null) return null;
   var text = String(cell);
   var m = text.match(/(?:HOLD|WAITING_PAYMENT|CONFIRMED|OWNER_APPROVED):([A-Za-z0-9_-]+)/);
+  if (m) return m[1];
+  m = text.match(/(?:бот\s*#|#)([A-Za-z0-9_-]+)/i);
   if (m) return m[1];
   return null;
 }

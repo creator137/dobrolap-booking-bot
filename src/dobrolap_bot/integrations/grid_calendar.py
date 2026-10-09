@@ -162,3 +162,32 @@ def is_occupied_cell(cell: str, exclude_booking_id: str | None = None) -> bool:
     if exclude_booking_id and exclude_booking_id in text:
         return False
     return True
+
+
+_STATUS_MARK_RU = {
+    "HOLD": "резерв",
+    "OWNER_APPROVED": "резерв",
+    "WAITING_PAYMENT": "резерв до оплаты",
+    "CONFIRMED": "бронь",
+}
+
+
+def calendar_cell_mark(status: str, booking_id: str, note: str | None = None) -> str:
+    """Human-readable calendar mark that still contains booking_id for release."""
+    label = _STATUS_MARK_RU.get((status or "").upper(), (status or "резерв").strip() or "резерв")
+    note_part = f" {(note or '').strip()}" if (note or "").strip() else ""
+    return f"{label}{note_part} · бот #{booking_id}"
+
+
+def extract_booking_id(cell: str) -> str | None:
+    import re
+
+    text = cell or ""
+    m = re.search(
+        r"(?:HOLD|WAITING_PAYMENT|CONFIRMED|OWNER_APPROVED):([A-Za-z0-9_-]+)",
+        text,
+    )
+    if m:
+        return m.group(1)
+    m = re.search(r"(?:бот\s*#|#)([A-Za-z0-9_-]+)", text, flags=re.IGNORECASE)
+    return m.group(1) if m else None

@@ -16,8 +16,10 @@ import yaml
 
 from dobrolap_bot.integrations.google_sheets import SheetBooking, SheetsUnavailableError
 from dobrolap_bot.integrations.grid_calendar import (
+    calendar_cell_mark,
     cell_text,
     date_columns,
+    extract_booking_id,
     is_occupied_cell,
     iter_room_rows,
     require_complete_date_range,
@@ -161,6 +163,7 @@ class GoogleSheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
         self._ensure_writable()
         values = self._values()
@@ -188,7 +191,7 @@ class GoogleSheetsGateway:
             if is_occupied_cell(cell_text(values[row_idx], col_idx), booking_id):
                 raise ValueError("unit_occupied")
 
-        mark = f"{status}:{booking_id}"
+        mark = calendar_cell_mark(status, booking_id, note)
         data = [
             {
                 "range": f"'{self.sheet_name}'!{_a1(row_idx + 1, col_idx + 1)}",
@@ -244,6 +247,7 @@ class GoogleSheetsGateway:
         date_from: date,
         date_to: date,
         status: str,
+        note: str | None = None,
     ) -> SheetBooking:
         if status.upper() in {"CANCELLED", "REJECTED", "EXPIRED", "OWNER_REJECTED"}:
             self.release_booking(booking_id=booking_id, unit_id=unit_id)
@@ -254,17 +258,12 @@ class GoogleSheetsGateway:
             date_from=date_from,
             date_to=date_to,
             status=status,
+            note=note,
         )
 
 
 def _extract_booking_id(cell: str) -> str | None:
-    import re
-
-    m = re.search(
-        r"(?:HOLD|WAITING_PAYMENT|CONFIRMED|OWNER_APPROVED):([A-Za-z0-9_-]+)",
-        cell,
-    )
-    return m.group(1) if m else None
+    return extract_booking_id(cell)
 
 
 def _a1(row_1based: int, col_1based: int) -> str:

@@ -21,6 +21,9 @@ build/
 data/app.db
 data/*.db
 
+# Local calendar dumps (may contain guest occupancy marks)
+data/exports/
+
 # Google service account keys / local secrets dir
 secrets/
 **/service-account*.json

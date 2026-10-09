@@ -5,16 +5,31 @@ from datetime import date
 import logging
 
 from aiogram import F, Router
-from aiogram.filters import BaseFilter
+from aiogram.filters import BaseFilter, Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from dobrolap_bot.bot.keyboards import (
+    OWNER_MENU_CLIENTS,
+    OWNER_MENU_CONFIRMED,
+    OWNER_MENU_HOME,
+    OWNER_MENU_PENDING,
+    OWNER_MENU_UNPAID,
     client_reply_kb,
     owner_actions_kb,
+    owner_admin_bookings_kb,
+    owner_admin_kb,
+    owner_booking_kb,
+    owner_menu_kb,
     owner_refund_kb,
     owner_unit_choice_kb,
+)
+from dobrolap_bot.bot.presentation import (
+    admin_booking_button_title,
+    format_admin_bookings_list,
+    format_admin_clients,
+    format_admin_overview,
 )
 from dobrolap_bot.bot.states import BookingForm, OwnerForm
 from dobrolap_bot.config.loader import Catalog
@@ -48,6 +63,102 @@ def _parse_owner_cb(data: str) -> tuple[str, str] | None:
     return parts[1], parts[2]
 
 
+async def _offer_owner_units(
+    *,
+    message,
+    booking_service: BookingService,
+    catalog: Catalog,
+    booking,
+    booking_id: str,
+    intro: str | None = None,
+) -> bool:
+    """Show free suitable units for the owner to pick. Returns False if none."""
+    try:
+        occupied = booking_service.occupied_catalog_ids(
+            booking.date_from,
+            booking.date_to,
+            exclude_booking_id=booking.id,
+        )
+    except SheetsUnavailableError:
+        logger.exception("owner unit picker sheets unavailable booking=%s", booking_id)
+        await message.answer(
+            "Не удалось проверить календарь Google Sheets. Свободные помещения не показаны, "
+            "чтобы случайно не предложить занятое место. Попробуйте позже."
+        )
+        return False
+
+    pets = [PetProfile.model_validate(item) for item in booking.payload.get("pets") or []]
+    result = booking_service.placement.suggest(
+        pets,
+        occupied_unit_ids=occupied,
+        limit=len(catalog.accommodations),
+        for_owner=True,
+    )
+    choices: list[tuple[str, str]] = []
+    for candidate in result.candidates:
+        unit = candidate.accommodation
+        if booking.unit_id and unit.id == booking.unit_id:
+            continue
+        try:
+            feeding_raw = booking.payload.get("feeding")
+            feeding = FeedingOption(feeding_raw) if feeding_raw else None
+            quote = booking_service.pricing.quote(
+                pets=pets,
+                unit=unit,
+                date_from=booking.date_from,
+                date_to=booking.date_to,
+                feeding=feeding,
+                service_ids=list(booking.payload.get("service_ids") or []),
+                promo_code=booking.payload.get("promo_code"),
+                promo_eligible=bool(booking.payload.get("promo_rule_id")),
+                promo_at=date.fromisoformat(booking.payload["promo_at"])
+                if booking.payload.get("promo_at") else None,
+                arrival_time=booking.payload.get("arrival_time"),
+            )
+            price = (
+                f" — {quote.total_rub:,} ₽".replace(",", " ")
+                if quote.has_accommodation_amount
+                else " — расчёт оператора"
+            )
+        except Exception:
+            logger.exception(
+                "owner alternative quote failed booking=%s unit=%s", booking_id, unit.id
+            )
+            price = " — цена уточняется"
+        choices.append((unit.id, f"{unit.name}{price}"))
+
+    if not choices:
+        flags = ", ".join(result.owner_flags) if result.owner_flags else "—"
+        await message.answer(
+            f"На даты {booking.date_from.strftime('%d.%m.%Y')}–"
+            f"{booking.date_to.strftime('%d.%m.%Y')} автоподбор не нашёл вариантов "
+            f"(флаги: {flags}).\n"
+            "Календарь теста сейчас покрывает 21.08.2026–31.12.2026; "
+            "проверьте занятость вручную в таблице или отклоните заявку."
+        )
+        return False
+
+    review_note = ""
+    if result.owner_flags:
+        review_note = (
+            "\n⚠️ Заявка с ручными флагами: "
+            + ", ".join(result.owner_flags)
+            + " — назначение помещения остаётся на вашей ответственности."
+        )
+
+    if intro is None:
+        intro = (
+            f"В заявке №{booking_id} ещё нет помещения — выберите свободный вариант:"
+            if not booking.unit_id
+            else f"Выберите другое подходящее свободное помещение для заявки №{booking_id}:"
+        )
+    await message.answer(
+        intro + review_note,
+        reply_markup=owner_unit_choice_kb(booking_id, choices),
+    )
+    return True
+
+
 @router.callback_query(F.data.startswith("own:approve:"))
 async def owner_approve(
     callback: CallbackQuery,
@@ -64,17 +175,44 @@ async def owner_approve(
     try:
         booking = await booking_service.approve(booking_id)
     except InvalidTransitionError:
-        logger.exception("owner approve invalid transition booking=%s", booking_id)
-        await callback.message.answer(
-            "Действие уже неактуально: статус заявки изменился. Откройте свежую карточку."
-        )
+        logger.warning("owner approve invalid transition booking=%s", booking_id)
+        current = await booking_service.get(booking_id)
+        if current is not None and current.status in (
+            BookingStatus.OWNER_APPROVED,
+            BookingStatus.WAITING_PAYMENT,
+        ):
+            # Old card / admin list: the reserve is already approved and waits
+            # for the deposit — offer the actions that make sense now.
+            await callback.message.answer(
+                f"Заявка №{booking_id} уже подтверждена, место зарезервировано и ждёт оплату залога.\n"
+                "Когда залог получен — нажмите «Оплата получена».",
+                reply_markup=owner_booking_kb(
+                    booking_id, current.status, has_unit=bool(current.unit_id)
+                ),
+            )
+        else:
+            await callback.message.answer(
+                "Действие уже неактуально: статус заявки изменился. Откройте свежую карточку."
+            )
         await callback.answer()
         return
     except ValueError as exc:
         msg = str(exc)
         if msg == "unit_required":
+            booking = await booking_service.get(booking_id)
+            if booking is None:
+                await callback.answer("Заявка не найдена", show_alert=True)
+                return
             await callback.message.answer(
-                "Сначала выберите помещение кнопкой «Другой вариант», затем подтвердите заявку."
+                "В заявке не выбрано помещение (клиент ушёл на ручной подбор). "
+                "Сначала выберите вариант ниже, затем снова нажмите «Подтвердить»."
+            )
+            await _offer_owner_units(
+                message=callback.message,
+                booking_service=booking_service,
+                catalog=catalog,
+                booking=booking,
+                booking_id=booking_id,
             )
         elif "unit_occupied" in msg:
             await callback.message.answer(
@@ -99,7 +237,8 @@ async def owner_approve(
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
         f"Заявка {booking_id} подтверждена, ждём оплату и чек.\n"
-        "Кнопка «Оплата получена» появится после того, как клиент пришлёт чек.\n\n"
+        "Когда залог получен (с чеком от клиента или без) — откройте заявку во вкладке "
+        "«💳 Ждут оплату» и нажмите «Оплата получена».\n\n"
         + format_owner_summary(booking, catalog),
     )
 
@@ -375,68 +514,12 @@ async def owner_alt_start(
     if booking is None:
         await callback.answer("Заявка не найдена", show_alert=True)
         return
-    try:
-        occupied = booking_service.occupied_catalog_ids(
-            booking.date_from,
-            booking.date_to,
-            exclude_booking_id=booking.id,
-        )
-    except SheetsUnavailableError:
-        logger.exception("owner alternatives sheets unavailable booking=%s", booking_id)
-        await callback.message.answer(
-            "Не удалось проверить календарь Google Sheets. Свободные помещения не показаны, "
-            "чтобы случайно не предложить занятое место. Попробуйте позже."
-        )
-        await callback.answer()
-        return
-
-    pets = [PetProfile.model_validate(item) for item in booking.payload.get("pets") or []]
-    result = booking_service.placement.suggest(
-        pets,
-        occupied_unit_ids=occupied,
-        limit=len(catalog.accommodations),
-    )
-    choices: list[tuple[str, str]] = []
-    for candidate in result.candidates:
-        unit = candidate.accommodation
-        if unit.id == booking.unit_id:
-            continue
-        try:
-            feeding_raw = booking.payload.get("feeding")
-            feeding = FeedingOption(feeding_raw) if feeding_raw else None
-            quote = booking_service.pricing.quote(
-                pets=pets,
-                unit=unit,
-                date_from=booking.date_from,
-                date_to=booking.date_to,
-                feeding=feeding,
-                service_ids=list(booking.payload.get("service_ids") or []),
-                promo_code=booking.payload.get("promo_code"),
-                promo_eligible=bool(booking.payload.get("promo_rule_id")),
-                promo_at=date.fromisoformat(booking.payload["promo_at"])
-                if booking.payload.get("promo_at") else None,
-                arrival_time=booking.payload.get("arrival_time"),
-            )
-            price = (
-                f" — {quote.total_rub:,} ₽".replace(",", " ")
-                if quote.has_accommodation_amount else " — расчёт оператора"
-            )
-        except Exception:
-            logger.exception(
-                "owner alternative quote failed booking=%s unit=%s", booking_id, unit.id
-            )
-            price = " — цена уточняется"
-        choices.append((unit.id, f"{unit.name}{price}"))
-
-    if not choices:
-        await callback.message.answer(
-            "Других подходящих свободных помещений на эти даты сейчас нет."
-        )
-        await callback.answer()
-        return
-    await callback.message.answer(
-        f"Выберите другое подходящее свободное помещение для заявки №{booking_id}:",
-        reply_markup=owner_unit_choice_kb(booking_id, choices),
+    await _offer_owner_units(
+        message=callback.message,
+        booking_service=booking_service,
+        catalog=catalog,
+        booking=booking,
+        booking_id=booking_id,
     )
     await callback.answer()
 
@@ -486,7 +569,7 @@ async def owner_alt_finish(
     summary = format_owner_summary(booking, catalog)
     await callback.message.answer(
         f"Помещение в заявке обновлено.\n\n{summary}",
-        reply_markup=owner_actions_kb(booking_id),
+        reply_markup=owner_actions_kb(booking_id, has_unit=bool(booking.unit_id)),
     )
     client_id = booking.customer_telegram_id
     unit = catalog.get_accommodation(unit_id)
@@ -525,11 +608,7 @@ async def owner_paid(
         await callback.answer()
         return
     except ValueError as exc:
-        if str(exc) == "receipt_required":
-            await callback.message.answer(
-                "Сначала дождитесь чека от клиента — кнопка сработает после загрузки чека."
-            )
-        elif str(exc) == "unit_required":
+        if str(exc) == "unit_required":
             await callback.message.answer("Для этой заявки не выбрано место в календаре. Выберите место и подтвердите заявку заново.")
         else:
             logger.warning("owner payment rejected booking=%s reason=%s", booking_id, exc)
@@ -550,8 +629,15 @@ async def owner_paid(
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    manual_note = (
+        "Оплата отмечена вами вручную (чек от клиента не загружен).\n"
+        if (booking.payload.get("payment") or {}).get("manual")
+        else ""
+    )
     await callback.message.answer(
-        f"Бронь №{booking_id} подтверждена.\n" + format_owner_summary(booking, catalog)
+        f"Бронь №{booking_id} подтверждена.\n"
+        + manual_note
+        + format_owner_summary(booking, catalog)
     )
     client_id = booking.customer_telegram_id
     if client_id and callback.bot:
@@ -562,3 +648,188 @@ async def owner_paid(
             + "\nДо встречи!",
         )
     await callback.answer("Оплата принята")
+
+
+async def _send_admin_home(
+    message: Message, booking_service: BookingService, *, with_menu: bool = False
+) -> None:
+    counts = await booking_service.repo.count_by_status()
+    text = format_admin_overview(counts)
+    if with_menu:
+        await message.answer(
+            "Панель владельца «Добролап».\nВыберите раздел кнопками ниже или /admin.",
+            reply_markup=owner_menu_kb(),
+        )
+    await message.answer(text, reply_markup=owner_admin_kb())
+
+
+async def _send_admin_bookings(
+    message: Message,
+    booking_service: BookingService,
+    catalog: Catalog,
+    *,
+    statuses: list[BookingStatus],
+    title: str,
+    empty_text: str,
+) -> None:
+    bookings = await booking_service.repo.list_bookings(statuses=statuses, limit=20)
+    text = format_admin_bookings_list(title, bookings, catalog, empty_text=empty_text)
+    buttons = [(b.id, admin_booking_button_title(b)) for b in bookings]
+    await message.answer(
+        text,
+        reply_markup=owner_admin_bookings_kb(buttons) if buttons else owner_admin_kb(),
+    )
+
+
+@router.message(CommandStart())
+async def owner_start(message: Message, state: FSMContext, booking_service: BookingService) -> None:
+    await state.clear()
+    await _send_admin_home(message, booking_service, with_menu=True)
+
+
+@router.message(Command("admin", "panel"))
+async def owner_admin(message: Message, booking_service: BookingService) -> None:
+    await _send_admin_home(message, booking_service, with_menu=True)
+
+
+@router.message(F.text == OWNER_MENU_HOME)
+async def owner_menu_home(message: Message, booking_service: BookingService) -> None:
+    await _send_admin_home(message, booking_service)
+
+
+@router.message(F.text == OWNER_MENU_PENDING)
+async def owner_menu_pending(
+    message: Message, booking_service: BookingService, catalog: Catalog
+) -> None:
+    await _send_admin_bookings(
+        message,
+        booking_service,
+        catalog,
+        statuses=[BookingStatus.WAITING_OWNER],
+        title="⏳ Заявки, которые ждут вашего решения",
+        empty_text="Сейчас нет заявок на рассмотрении.",
+    )
+
+
+@router.message(F.text == OWNER_MENU_UNPAID)
+async def owner_menu_unpaid(
+    message: Message, booking_service: BookingService, catalog: Catalog
+) -> None:
+    await _send_admin_bookings(
+        message,
+        booking_service,
+        catalog,
+        statuses=[BookingStatus.WAITING_PAYMENT],
+        title="💳 Неоплаченные резервы (ждут залог / чек)",
+        empty_text="Неоплаченных резервов сейчас нет.",
+    )
+
+
+@router.message(F.text == OWNER_MENU_CONFIRMED)
+async def owner_menu_confirmed(
+    message: Message, booking_service: BookingService, catalog: Catalog
+) -> None:
+    await _send_admin_bookings(
+        message,
+        booking_service,
+        catalog,
+        statuses=[BookingStatus.CONFIRMED],
+        title="✅ Подтверждённые брони",
+        empty_text="Подтверждённых броней пока нет.",
+    )
+
+
+@router.message(F.text == OWNER_MENU_CLIENTS)
+async def owner_menu_clients(message: Message, booking_service: BookingService) -> None:
+    clients = await booking_service.repo.list_customers(limit=40)
+    await message.answer(format_admin_clients(clients), reply_markup=owner_admin_kb())
+
+
+@router.callback_query(F.data == "adm:home")
+async def admin_home(callback: CallbackQuery, booking_service: BookingService) -> None:
+    counts = await booking_service.repo.count_by_status()
+    try:
+        await callback.message.edit_text(
+            format_admin_overview(counts), reply_markup=owner_admin_kb()
+        )
+    except Exception:
+        await callback.message.answer(
+            format_admin_overview(counts), reply_markup=owner_admin_kb()
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:pending")
+async def admin_pending(
+    callback: CallbackQuery, booking_service: BookingService, catalog: Catalog
+) -> None:
+    await _send_admin_bookings(
+        callback.message,
+        booking_service,
+        catalog,
+        statuses=[BookingStatus.WAITING_OWNER],
+        title="⏳ Заявки, которые ждут вашего решения",
+        empty_text="Сейчас нет заявок на рассмотрении.",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:unpaid")
+async def admin_unpaid(
+    callback: CallbackQuery, booking_service: BookingService, catalog: Catalog
+) -> None:
+    await _send_admin_bookings(
+        callback.message,
+        booking_service,
+        catalog,
+        statuses=[BookingStatus.WAITING_PAYMENT],
+        title="💳 Неоплаченные резервы (ждут залог / чек)",
+        empty_text="Неоплаченных резервов сейчас нет.",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:confirmed")
+async def admin_confirmed(
+    callback: CallbackQuery, booking_service: BookingService, catalog: Catalog
+) -> None:
+    await _send_admin_bookings(
+        callback.message,
+        booking_service,
+        catalog,
+        statuses=[BookingStatus.CONFIRMED],
+        title="✅ Подтверждённые брони",
+        empty_text="Подтверждённых броней пока нет.",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:clients")
+async def admin_clients(callback: CallbackQuery, booking_service: BookingService) -> None:
+    clients = await booking_service.repo.list_customers(limit=40)
+    text = format_admin_clients(clients)
+    try:
+        await callback.message.edit_text(text, reply_markup=owner_admin_kb())
+    except Exception:
+        await callback.message.answer(text, reply_markup=owner_admin_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:open:"))
+async def admin_open_booking(
+    callback: CallbackQuery,
+    booking_service: BookingService,
+    catalog: Catalog,
+) -> None:
+    booking_id = (callback.data or "").removeprefix("adm:open:")
+    booking = await booking_service.get(booking_id)
+    if booking is None:
+        await callback.answer("Заявка не найдена", show_alert=True)
+        return
+    await callback.message.answer(
+        format_owner_summary(booking, catalog),
+        reply_markup=owner_booking_kb(
+            booking.id, booking.status, has_unit=bool(booking.unit_id)
+        ),
+    )
+    await callback.answer()

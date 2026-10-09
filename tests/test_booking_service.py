@@ -116,7 +116,7 @@ async def test_approve_blocked_if_occupied(booking_service):
 
 
 @pytest.mark.asyncio
-async def test_confirm_requires_receipt(booking_service):
+async def test_owner_can_confirm_without_receipt(booking_service):
     booking, _ = await booking_service.submit_booking(
         telegram_user_id=555,
         customer_name="D",
@@ -132,8 +132,34 @@ async def test_confirm_requires_receipt(booking_service):
         manual_matching=False,
     )
     booking = await booking_service.approve(booking.id)
-    with pytest.raises(ValueError, match="receipt_required"):
-        await booking_service.confirm_payment(booking.id)
+    booking = await booking_service.confirm_payment(booking.id)
+    assert booking.status == BookingStatus.CONFIRMED
+    assert booking.hold_expires_at is None
+    assert booking.payload["payment"]["manual"] is True
+    assert booking.payload["payment"]["marked_by"] == "owner"
+    assert any(e["action"] == "payment_marked_manually" for e in booking.payload["audit"])
+    sheet = {r.external_id: r for r in booking_service.sheets.list_bookings()}
+    assert sheet[booking.id].status == BookingStatus.CONFIRMED.value
+    stored = await booking_service.get(booking.id)
+    assert stored.status == BookingStatus.CONFIRMED
+
+
+@pytest.mark.asyncio
+async def test_confirm_with_receipt_is_not_manual(booking_service):
+    booking, _ = await booking_service.submit_booking(
+        telegram_user_id=556, customer_name="E", username=None, consent_at=None,
+        date_from=date(2027, 1, 5), date_to=date(2027, 1, 7), pets=[_pet()],
+        unit_id="comfort", feeding=FeedingOption.OWNER_FOOD, service_ids=[],
+        placement_flags=[], manual_matching=False,
+    )
+    booking = await booking_service.approve(booking.id)
+    await booking_service.attach_receipt(booking.id, "r1")
+    booking = await booking_service.confirm_payment(booking.id)
+    assert booking.status == BookingStatus.CONFIRMED
+    assert booking.payload["payment"] == {
+        **booking.payload["payment"], "manual": False, "receipts": 1
+    }
+    assert not any(e["action"] == "payment_marked_manually" for e in booking.payload["audit"])
 
 
 @pytest.mark.asyncio
@@ -234,8 +260,9 @@ async def test_change_after_hold_releases_old_room_and_receipt(booking_service):
     assert booking.payload["receipt_file_ids"] == []
     assert old_label not in booking_service.sheets.occupied_unit_ids(booking.date_from, booking.date_to)
     booking = await booking_service.approve(booking.id)
-    with pytest.raises(ValueError, match="receipt_required"):
-        await booking_service.confirm_payment(booking.id)
+    # Old receipt was dropped together with the old room; owner may still confirm manually.
+    booking = await booking_service.confirm_payment(booking.id)
+    assert booking.payload["payment"]["manual"] is True
 
 
 @pytest.mark.asyncio
