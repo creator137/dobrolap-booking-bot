@@ -130,6 +130,24 @@ class BookingService:
         labels = self.sheet_labels(unit_id)
         return labels[0] if labels else unit_id
 
+    def fetch_occupied_labels(
+        self,
+        date_from: date,
+        date_to: date,
+        *,
+        exclude_booking_id: str | None = None,
+    ) -> set[str]:
+        """Raw occupied calendar labels — one Sheets API read. Reuse the result via the
+        *_from_labels helpers below instead of calling this again per candidate unit:
+        each call is a full-sheet network read, and looping it per unit risks hitting
+        the API's rate limit (this caused repeated 'sheets_unavailable' failures)."""
+        return {
+            x.strip().lower()
+            for x in self.sheets.occupied_unit_ids(
+                date_from, date_to, exclude_booking_id=exclude_booking_id
+            )
+        }
+
     def resolve_free_sheet_label(
         self,
         unit_id: str,
@@ -140,12 +158,23 @@ class BookingService:
         preferred_label: str | None = None,
     ) -> str:
         """Pick first free calendar row for catalog unit; raise if pool full."""
-        occupied = {
-            x.strip().lower()
-            for x in self.sheets.occupied_unit_ids(
-                date_from, date_to, exclude_booking_id=exclude_booking_id
-            )
-        }
+        occupied = self.fetch_occupied_labels(
+            date_from, date_to, exclude_booking_id=exclude_booking_id
+        )
+        return self.free_sheet_label_from_labels(
+            unit_id, occupied, preferred_label=preferred_label
+        )
+
+    def free_sheet_label_from_labels(
+        self,
+        unit_id: str,
+        occupied_labels: set[str],
+        *,
+        preferred_label: str | None = None,
+    ) -> str:
+        """Same as resolve_free_sheet_label, but takes an already-fetched occupied-labels
+        set instead of issuing its own Sheets API read — for looping over many candidates."""
+        occupied = {x.strip().lower() for x in occupied_labels}
         labels = self.sheet_labels(unit_id)
         if preferred_label:
             if preferred_label not in labels:
@@ -171,12 +200,14 @@ class BookingService:
         exclude_booking_id: str | None = None,
     ) -> set[str]:
         """Catalog units with no free calendar slot in the range."""
-        occupied_labels = {
-            x.strip().lower()
-            for x in self.sheets.occupied_unit_ids(
-                date_from, date_to, exclude_booking_id=exclude_booking_id
-            )
-        }
+        occupied_labels = self.fetch_occupied_labels(
+            date_from, date_to, exclude_booking_id=exclude_booking_id
+        )
+        return self.occupied_catalog_ids_from_labels(occupied_labels)
+
+    def occupied_catalog_ids_from_labels(self, occupied_labels: set[str]) -> set[str]:
+        """Same as occupied_catalog_ids, but takes an already-fetched occupied-labels set."""
+        occupied_labels = {x.strip().lower() for x in occupied_labels}
         out: set[str] = set()
         for acc in self.catalog.accommodations:
             labels = [x.strip().lower() for x in acc.calendar_labels()]
@@ -210,6 +241,9 @@ class BookingService:
         review_discount_claim: bool = False,
         review_proof_file_id: str | None = None,
         review_proof_is_document: bool = False,
+        placement_together: bool = True,
+        service_only: bool = False,
+        service_address: str | None = None,
     ) -> tuple[BookingRecord, PriceQuote | None]:
         customer_id = await self.repo.upsert_customer(
             telegram_user_id=telegram_user_id,
@@ -250,6 +284,7 @@ class BookingService:
                 promo_eligible=promo_rule is not None,
                 promo_at=promo_at,
                 arrival_time=arrival_time,
+                together=placement_together,
             )
             if review_discount_claim:
                 quote.provisional = True
@@ -264,6 +299,9 @@ class BookingService:
             "service_details": service_details or {},
             "placement_flags": placement_flags,
             "manual_matching": manual_matching,
+            "placement_together": placement_together,
+            "service_only": service_only,
+            "service_address": service_address,
             "promo_code": promo_code,
             "review_discount_claim": review_discount_claim,
             "review_proof_file_id": review_proof_file_id,
@@ -370,35 +408,40 @@ class BookingService:
         booking = await self._require(booking_id)
         if booking.status != BookingStatus.WAITING_OWNER:
             raise InvalidTransitionError(f"{booking.status} → OWNER_APPROVED is not allowed")
-        if not booking.unit_id:
+        service_only = bool(booking.payload.get("service_only"))
+        if not service_only and not booking.unit_id:
             raise ValueError("unit_required")
-        try:
-            sheet_label = self.resolve_free_sheet_label(
-                booking.unit_id,
-                booking.date_from,
-                booking.date_to,
-                exclude_booking_id=booking.id,
-                preferred_label=booking.payload.get("requested_sheet_label"),
-            )
-            self.sheets.reserve_booking(
-                booking_id=booking.id,
-                unit_id=sheet_label,
-                date_from=booking.date_from,
-                date_to=booking.date_to,
-                status=BookingStatus.WAITING_PAYMENT.value,
-                note=calendar_note_for_booking(booking),
-            )
-        except ValueError as exc:
-            if "unit_occupied" in str(exc):
-                raise ValueError("unit_occupied_on_approve") from exc
-            raise
+
+        sheet_label: str | None = None
+        if not service_only:
+            try:
+                sheet_label = self.resolve_free_sheet_label(
+                    booking.unit_id,
+                    booking.date_from,
+                    booking.date_to,
+                    exclude_booking_id=booking.id,
+                    preferred_label=booking.payload.get("requested_sheet_label"),
+                )
+                self.sheets.reserve_booking(
+                    booking_id=booking.id,
+                    unit_id=sheet_label,
+                    date_from=booking.date_from,
+                    date_to=booking.date_to,
+                    status=BookingStatus.WAITING_PAYMENT.value,
+                    note=calendar_note_for_booking(booking),
+                )
+            except ValueError as exc:
+                if "unit_occupied" in str(exc):
+                    raise ValueError("unit_occupied_on_approve") from exc
+                raise
 
         now = _utcnow()
         booking.status = BookingStatus.WAITING_PAYMENT
         booking.hold_expires_at = now + timedelta(hours=self.hold_hours)
         booking.last_reminder_at = None
+        extra_payload = {"sheet_label": sheet_label} if sheet_label else {}
         booking.payload = self._append_audit(
-            {**booking.payload, "sheet_label": sheet_label},
+            {**booking.payload, **extra_payload},
             action="approve_hold",
             from_status=BookingStatus.WAITING_OWNER.value,
             to_status=BookingStatus.WAITING_PAYMENT.value,
@@ -411,10 +454,12 @@ class BookingService:
                 booking, expected_status=BookingStatus.WAITING_OWNER
             )
             if not ok:
-                self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
+                if sheet_label:
+                    self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
                 raise InvalidTransitionError("concurrent status change on approve")
         except Exception:
-            self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
+            if sheet_label:
+                self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
             raise
         return booking
 
@@ -623,6 +668,7 @@ class BookingService:
             promo_at=date.fromisoformat(booking.payload["promo_at"])
             if booking.payload.get("promo_at") else None,
             arrival_time=booking.payload.get("arrival_time"),
+            together=booking.payload.get("placement_together", True),
         )
         held = booking.payload.get("sheet_label")
         if held:

@@ -32,6 +32,7 @@ class PlacementService:
         occupied_unit_ids: set[str] | None = None,
         limit: int = 5,
         for_owner: bool = False,
+        tariff_kind: str | None = None,
     ) -> PlacementResult:
         occupied_unit_ids = occupied_unit_ids or set()
         owner_flags: list[str] = []
@@ -58,11 +59,14 @@ class PlacementService:
         if any(f.startswith("needs_review:") for f in owner_flags):
             requires_manual = True
 
+        if tariff_kind:
+            owner_flags.append(f"tariff_requested:{tariff_kind}")
+
         per_pet: list[list[PlacementCandidate]] = []
         for pet in pets:
             per_pet.append(
                 self._candidates_for_pet(
-                    pet, occupied_unit_ids, relax_hard_blocks=for_owner
+                    pet, occupied_unit_ids, relax_hard_blocks=for_owner, tariff_kind=tariff_kind
                 )
             )
 
@@ -124,6 +128,7 @@ class PlacementService:
         occupied_unit_ids: set[str],
         *,
         relax_hard_blocks: bool = False,
+        tariff_kind: str | None = None,
     ) -> list[PlacementCandidate]:
         # Untreated parasites / special dog cases → no automatic client offer.
         # Owner picker may relax these so a room can still be assigned manually.
@@ -136,6 +141,8 @@ class PlacementService:
 
         out: list[PlacementCandidate] = []
         for unit in self.catalog.active_accommodations():
+            if tariff_kind and unit.tariff_kind != tariff_kind:
+                continue
             if unit.id in occupied_unit_ids:
                 continue
             candidate = self._evaluate(pet, unit)

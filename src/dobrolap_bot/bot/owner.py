@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import logging
 
@@ -8,13 +9,23 @@ from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InputMediaPhoto,
+    Message,
+    TelegramObject,
+)
 
+import tempfile
+
+from dobrolap_bot.bot.helpers import resolve_photo_path
 from dobrolap_bot.bot.keyboards import (
     OWNER_MENU_CLIENTS,
     OWNER_MENU_CONFIRMED,
     OWNER_MENU_HOME,
     OWNER_MENU_PENDING,
+    OWNER_MENU_PRICES,
     OWNER_MENU_UNPAID,
     client_reply_kb,
     owner_actions_kb,
@@ -36,6 +47,7 @@ from dobrolap_bot.config.loader import Catalog
 from dobrolap_bot.domain.enums import BookingStatus, FeedingOption
 from dobrolap_bot.domain.models import PetProfile
 from dobrolap_bot.integrations.google_sheets import SheetsUnavailableError
+from dobrolap_bot.services import price_admin
 from dobrolap_bot.services.booking import BookingService, InvalidTransitionError
 from dobrolap_bot.services.summary import format_client_status, format_owner_summary
 
@@ -70,11 +82,12 @@ async def _offer_owner_units(
     catalog: Catalog,
     booking,
     booking_id: str,
+    assets_dir: Path,
     intro: str | None = None,
 ) -> bool:
     """Show free suitable units for the owner to pick. Returns False if none."""
     try:
-        occupied = booking_service.occupied_catalog_ids(
+        occupied_labels = booking_service.fetch_occupied_labels(
             booking.date_from,
             booking.date_to,
             exclude_booking_id=booking.id,
@@ -87,6 +100,7 @@ async def _offer_owner_units(
         )
         return False
 
+    occupied = booking_service.occupied_catalog_ids_from_labels(occupied_labels)
     pets = [PetProfile.model_validate(item) for item in booking.payload.get("pets") or []]
     result = booking_service.placement.suggest(
         pets,
@@ -95,7 +109,7 @@ async def _offer_owner_units(
         for_owner=True,
     )
     choices: list[tuple[str, str]] = []
-    for candidate in result.candidates:
+    for i, candidate in enumerate(result.candidates, 1):
         unit = candidate.accommodation
         if booking.unit_id and unit.id == booking.unit_id:
             continue
@@ -114,6 +128,7 @@ async def _offer_owner_units(
                 promo_at=date.fromisoformat(booking.payload["promo_at"])
                 if booking.payload.get("promo_at") else None,
                 arrival_time=booking.payload.get("arrival_time"),
+                together=booking.payload.get("placement_together", True),
             )
             price = (
                 f" — {quote.total_rub:,} ₽".replace(",", " ")
@@ -126,6 +141,40 @@ async def _offer_owner_units(
             )
             price = " — цена уточняется"
         choices.append((unit.id, f"{unit.name}{price}"))
+
+        try:
+            sheet_label = booking_service.free_sheet_label_from_labels(unit.id, occupied_labels)
+        except ValueError:
+            sheet_label = None
+
+        photos = []
+        for path_str in unit.photos_for(pets, sheet_label=sheet_label)[:5]:
+            resolved = resolve_photo_path(path_str, assets_dir)
+            if resolved:
+                photos.append(resolved)
+        if photos:
+            caption = f"{i}. {unit.name}{price}"
+            media = [
+                InputMediaPhoto(
+                    media=FSInputFile(photo_path),
+                    caption=caption if idx == 0 else None,
+                )
+                for idx, photo_path in enumerate(photos)
+            ]
+            try:
+                await message.answer_media_group(media)
+            except Exception:
+                logger.exception(
+                    "owner media group failed booking=%s unit=%s", booking_id, unit.id
+                )
+                for photo_path in photos:
+                    try:
+                        await message.answer_photo(FSInputFile(photo_path), caption=caption)
+                        caption = None
+                    except Exception:
+                        logger.exception(
+                            "owner single photo failed booking=%s path=%s", booking_id, photo_path
+                        )
 
     if not choices:
         flags = ", ".join(result.owner_flags) if result.owner_flags else "—"
@@ -166,6 +215,7 @@ async def owner_approve(
     booking_service: BookingService,
     catalog: Catalog,
     payment_instructions: str,
+    assets_dir: Path,
 ) -> None:
     parsed = _parse_owner_cb(callback.data or "")
     if not parsed:
@@ -213,6 +263,7 @@ async def owner_approve(
                 catalog=catalog,
                 booking=booking,
                 booking_id=booking_id,
+                assets_dir=assets_dir,
             )
         elif "unit_occupied" in msg:
             await callback.message.answer(
@@ -403,14 +454,14 @@ async def owner_cancel_finish(
 
     client_id = booking.customer_telegram_id
     if client_id and message.bot:
-        text = f"Бронь {booking_id} отменена владельцем."
+        text = f"Бронь {booking_id} отменена руководителем зоогостиницы."
         if reason:
             text += f"\nПричина: {reason}"
         refund = booking.payload.get("refund") or {}
         if refund.get("status") == "pending":
             text += (
                 "\nВозврат залога выполняется вручную — статус возврата придёт отдельно, "
-                "когда владелец его отметит."
+                "когда руководитель зоогостиницы его отметит."
             )
         text += "\nНовая заявка: /start"
         await message.bot.send_message(client_id, text)
@@ -494,7 +545,7 @@ async def owner_ask_finish(
     if client_id and message.bot:
         await message.bot.send_message(
             client_id,
-            f"Вопрос от владельца по заявке {booking_id}:\n{text}",
+            f"Вопрос от руководителя зоогостиницы по заявке {booking_id}:\n{text}",
             reply_markup=client_reply_kb(booking_id),
         )
 
@@ -504,6 +555,7 @@ async def owner_alt_start(
     callback: CallbackQuery,
     booking_service: BookingService,
     catalog: Catalog,
+    assets_dir: Path,
 ) -> None:
     parsed = _parse_owner_cb(callback.data or "")
     if not parsed:
@@ -520,6 +572,7 @@ async def owner_alt_start(
         catalog=catalog,
         booking=booking,
         booking_id=booking_id,
+        assets_dir=assets_dir,
     )
     await callback.answer()
 
@@ -657,7 +710,7 @@ async def _send_admin_home(
     text = format_admin_overview(counts)
     if with_menu:
         await message.answer(
-            "Панель владельца «Добролап».\nВыберите раздел кнопками ниже или /admin.",
+            "Панель руководителя зоогостиницы «Добролап».\nВыберите раздел кнопками ниже или /admin.",
             reply_markup=owner_menu_kb(),
         )
     await message.answer(text, reply_markup=owner_admin_kb())
@@ -743,6 +796,78 @@ async def owner_menu_confirmed(
 async def owner_menu_clients(message: Message, booking_service: BookingService) -> None:
     clients = await booking_service.repo.list_customers(limit=40)
     await message.answer(format_admin_clients(clients), reply_markup=owner_admin_kb())
+
+
+@router.message(Command("prices"))
+@router.message(F.text == OWNER_MENU_PRICES)
+async def owner_prices_export(
+    message: Message, state: FSMContext, catalog: Catalog
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "dobrolap_prices.xlsx"
+        price_admin.export_prices(catalog, path)
+        await message.answer_document(
+            FSInputFile(path, filename="прайс.xlsx"),
+            caption=(
+                "Текущие цены на размещение (обычные и сезонные).\n"
+                "Чтобы поменять цену — отредактируйте число и пришлите файл обратно сюда.\n"
+                "Чтобы добавить новую позицию — допишите строку снизу на листе «Цены».\n"
+                "Чтобы убрать позицию — удалите всю строку.\n"
+                "Подробности и список допустимых кодов — на листе «Легенда».\n\n"
+                "Пришлите изменённый файл в ответ, чтобы применить. /cancel_prices — отменить."
+            ),
+        )
+    await state.set_state(OwnerForm.awaiting_price_file)
+
+
+@router.message(Command("cancel_prices"))
+async def owner_prices_cancel(message: Message, state: FSMContext) -> None:
+    if await state.get_state() == OwnerForm.awaiting_price_file:
+        await state.clear()
+        await message.answer("Загрузка прайса отменена.", reply_markup=owner_menu_kb())
+
+
+@router.message(OwnerForm.awaiting_price_file, F.document)
+async def owner_prices_import(
+    message: Message, state: FSMContext, catalog: Catalog
+) -> None:
+    doc = message.document
+    if not (doc.file_name or "").lower().endswith(".xlsx"):
+        await message.answer("Нужен файл .xlsx — пришлите файл, который прислал бот, после правок.")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "uploaded_prices.xlsx"
+        await message.bot.download(doc, destination=path)
+        try:
+            new_rates = price_admin.parse_prices_workbook(path)
+        except price_admin.PriceImportError as exc:
+            errors = "\n".join(f"• {e}" for e in exc.errors[:15])
+            more = "" if len(exc.errors) <= 15 else f"\n…и ещё {len(exc.errors) - 15}."
+            await message.answer(
+                "Не смог применить файл — есть ошибки:\n" + errors + more +
+                "\n\nИсправьте и пришлите файл ещё раз, либо /cancel_prices."
+            )
+            return
+
+    summary = price_admin.diff_summary(catalog.daily_rates, new_rates)
+    config_dir = catalog.config_dir
+    if config_dir is None:
+        await message.answer("Не знаю, куда сохранить прайс (нет config_dir) — обратитесь к разработчику.")
+        return
+    price_admin.save_daily_rates(config_dir, new_rates)
+    catalog.daily_rates = new_rates
+    await state.clear()
+    await message.answer(
+        f"Прайс обновлён и уже действует для новых заявок ({summary}).",
+        reply_markup=owner_menu_kb(),
+    )
+
+
+@router.message(OwnerForm.awaiting_price_file)
+async def owner_prices_import_wrong_type(message: Message) -> None:
+    await message.answer(
+        "Жду файл .xlsx с прайсом (как прислал бот). Если передумали — /cancel_prices."
+    )
 
 
 @router.callback_query(F.data == "adm:home")

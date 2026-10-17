@@ -63,7 +63,7 @@ def _booking() -> BookingRecord:
 
 
 def test_all_public_labels_are_russian():
-    assert status_label(BookingStatus.WAITING_OWNER) == "Ожидает решения владельца"
+    assert status_label(BookingStatus.WAITING_OWNER) == "Ожидает решения руководителя зоогостиницы"
     assert pet_kind_label(PetKind.DOG) == "Собака"
     assert feeding_label(FeedingOption.HOTEL_RATION) == "Рацион зоогостиницы"
     assert "Google Sheets" in placement_flag_label("sheets_unavailable")
@@ -100,7 +100,7 @@ def test_owner_card_is_complete_and_hides_internal_values():
 
 def test_client_card_hides_internal_values():
     text = format_client_status(_booking(), _catalog())
-    assert "Ожидает решения владельца" in text
+    assert "Ожидает решения руководителя зоогостиницы" in text
     assert "Рацион зоогостиницы" in text
     assert "WAITING_OWNER" not in text
     assert "hotel_ration" not in text

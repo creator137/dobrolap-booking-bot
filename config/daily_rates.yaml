@@ -1,0 +1,106 @@
+# Цены на размещение (матрица тариф × вид питомца × размер × возраст × сезон).
+# Этот файл перезаписывается полностью при импорте через /prices в боте
+# (owner.py → price_admin.py) — ручные правки переживут импорт только до
+# следующего /prices. Чтобы поправить вручную, отредактируйте и перезапустите
+# бота, либо выгрузите /prices → поправьте в Excel → отправьте файл обратно.
+#
+# unavailable: true — тариф для этого вида/размера питомца не предлагается.
+# price_rub_season / price_from_rub_season / price_to_rub_season — сезон
+# отпусков и праздников; применяется, когда заезд попадает в период из
+# price_rules.yaml: season_periods.
+
+daily_rates:
+  # --- dogs miniature adult ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: miniature, price_rub: 2200, price_rub_season: 2900}
+  - {accommodation_tariff: comfort, pet_kind: dog, size_class: miniature, price_rub: 1900, price_rub_season: 2300}
+  - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: miniature, price_rub: 1950, price_rub_season: 2350}
+  - {accommodation_tariff: premium, pet_kind: dog, size_class: miniature, unavailable: true}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: miniature, price_rub: 1600, price_rub_season: 1800}
+  - {accommodation_tariff: standard_m, pet_kind: dog, size_class: miniature, price_rub: 1550, price_rub_season: 1750}
+  - {accommodation_tariff: optimal_s, pet_kind: dog, size_class: miniature, price_rub: 1400, price_rub_season: 1500}
+  - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: miniature, unavailable: true}
+  - {accommodation_tariff: home, pet_kind: dog, size_class: miniature, price_rub: 1400}
+
+  # --- dogs miniature puppy ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 2300, price_rub_season: 3000}
+  - {accommodation_tariff: comfort, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 2000, price_rub_season: 2400}
+  - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 2050, price_rub_season: 2450}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: miniature, is_young: true, unavailable: true}
+  - {accommodation_tariff: standard_m, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 1650, price_rub_season: 1850}
+  - {accommodation_tariff: optimal_s, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 1500, price_rub_season: 1600}
+  - {accommodation_tariff: home, pet_kind: dog, size_class: miniature, is_young: true, price_rub: 1500}
+
+  # --- dogs medium adult ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: medium, price_rub: 2300, price_rub_season: 3000}
+  - {accommodation_tariff: comfort, pet_kind: dog, size_class: medium, price_rub: 2000, price_rub_season: 2400}
+  - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: medium, price_rub: 2050, price_rub_season: 2450}
+  - {accommodation_tariff: premium, pet_kind: dog, size_class: medium, price_rub: 1900, price_rub_season: 2100}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: medium, price_rub: 1700, price_rub_season: 1900}
+  - {accommodation_tariff: standard_m, pet_kind: dog, size_class: medium, price_rub: 1650, price_rub_season: 1850}
+  - {accommodation_tariff: optimal_s, pet_kind: dog, size_class: medium, unavailable: true}
+  - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: medium, price_rub: 2000, price_rub_season: 2300}
+  - {accommodation_tariff: home, pet_kind: dog, size_class: medium, unavailable: true}
+
+  # --- dogs medium puppy ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2400, price_rub_season: 3150}
+  - {accommodation_tariff: comfort, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2100, price_rub_season: 2550}
+  - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2150, price_rub_season: 2600}
+  - {accommodation_tariff: premium, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2050, price_rub_season: 2300}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: medium, is_young: true, price_rub: 1800, price_rub_season: 2000}
+  - {accommodation_tariff: standard_m, pet_kind: dog, size_class: medium, is_young: true, price_rub: 1750, price_rub_season: 1950}
+  - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: medium, is_young: true, price_rub: 2100, price_rub_season: 2450}
+
+  # --- dogs large adult (spreadsheet: from 25 kg) ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: large, price_rub: 2400, price_rub_season: 3150}
+  - {accommodation_tariff: comfort, pet_kind: dog, size_class: large, price_rub: 2100, price_rub_season: 2550}
+  - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: large, price_rub: 2150, price_rub_season: 2600}
+  - {accommodation_tariff: premium, pet_kind: dog, size_class: large, price_rub: 2050, price_rub_season: 2300}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: large, price_rub: 1800, price_rub_season: 2000}
+  - {accommodation_tariff: standard_m, pet_kind: dog, size_class: large, price_rub: 1750, price_rub_season: 1950}
+  - {accommodation_tariff: optimal_s, pet_kind: dog, size_class: large, unavailable: true}
+  - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: large, price_rub: 2100, price_rub_season: 2450}
+  - {accommodation_tariff: home, pet_kind: dog, size_class: large, unavailable: true}
+
+  # --- dogs large puppy ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: large, is_young: true, price_rub: 2500, price_rub_season: 3250}
+  - {accommodation_tariff: comfort, pet_kind: dog, size_class: large, is_young: true, price_rub: 2200, price_rub_season: 2650}
+  - {accommodation_tariff: comfort_plus, pet_kind: dog, size_class: large, is_young: true, price_rub: 2250, price_rub_season: 2700}
+  - {accommodation_tariff: premium, pet_kind: dog, size_class: large, is_young: true, price_rub: 2150, price_rub_season: 2400}
+  - {accommodation_tariff: standard_l, pet_kind: dog, size_class: large, is_young: true, price_rub: 1900, price_rub_season: 2100}
+  - {accommodation_tariff: standard_m, pet_kind: dog, size_class: large, is_young: true, price_rub: 1850, price_rub_season: 2050}
+  - {accommodation_tariff: outdoor_comfort, pet_kind: dog, size_class: large, is_young: true, price_rub: 2200, price_rub_season: 2550}
+
+  # --- puppies under one month: VIP+ only, one price for every size ---
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: miniature, is_young: true, under_one_month: true, price_rub: 2600, price_rub_season: 3400}
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: medium, is_young: true, under_one_month: true, price_rub: 2600, price_rub_season: 3400}
+  - {accommodation_tariff: vip_plus, pet_kind: dog, size_class: large, is_young: true, under_one_month: true, price_rub: 2600, price_rub_season: 3400}
+
+  # --- cats adult ---
+  - {accommodation_tariff: vip_plus, pet_kind: cat, price_rub: 1200, price_rub_season: 1600}
+  - {accommodation_tariff: comfort, pet_kind: cat, price_rub: 950, price_rub_season: 1150}
+  - {accommodation_tariff: comfort_plus, pet_kind: cat, price_rub: 1000, price_rub_season: 1200}
+  - {accommodation_tariff: standard_l, pet_kind: cat, price_rub: 750, price_rub_season: 850}
+  - {accommodation_tariff: standard_m, pet_kind: cat, price_rub: 700, price_rub_season: 800}
+  - {accommodation_tariff: optimal_s, pet_kind: cat, price_rub: 600, price_rub_season: 650}
+  - {accommodation_tariff: economy, pet_kind: cat, price_rub: 650, price_rub_season: 700}
+  - {accommodation_tariff: home, pet_kind: cat, price_rub: 600}
+
+  # --- cats kitten ---
+  - {accommodation_tariff: vip_plus, pet_kind: cat, is_young: true, price_rub: 1350, price_rub_season: 1800}
+  - {accommodation_tariff: comfort, pet_kind: cat, is_young: true, price_rub: 1100, price_rub_season: 1350}
+  - {accommodation_tariff: comfort_plus, pet_kind: cat, is_young: true, price_rub: 1150, price_rub_season: 1400}
+  - {accommodation_tariff: standard_l, pet_kind: cat, is_young: true, price_rub: 850, price_rub_season: 950}
+  - {accommodation_tariff: standard_m, pet_kind: cat, is_young: true, price_rub: 800, price_rub_season: 900}
+  - {accommodation_tariff: optimal_s, pet_kind: cat, is_young: true, price_rub: 700, price_rub_season: 750}
+  - {accommodation_tariff: economy, pet_kind: cat, is_young: true, price_rub: 750, price_rub_season: 800}
+  - {accommodation_tariff: home, pet_kind: cat, is_young: true, price_rub: 700}
+
+  # --- kittens under one month: VIP+ only ---
+  - {accommodation_tariff: vip_plus, pet_kind: cat, is_young: true, under_one_month: true, price_rub: 1500, price_rub_season: 2000}
+
+  # --- small animals: VIP+ only ---
+  - {accommodation_tariff: vip_plus, pet_kind: rabbit, price_rub: 650, price_rub_season: 750}
+  - {accommodation_tariff: vip_plus, pet_kind: rat, price_rub: 650, price_rub_season: 750}
+  - {accommodation_tariff: vip_plus, pet_kind: hamster, price_rub: 300, price_rub_season: 350}
+  - {accommodation_tariff: vip_plus, pet_kind: bird, price_from_rub: 300, price_to_rub: 650, price_from_rub_season: 350, price_to_rub_season: 750}
+  - {accommodation_tariff: vip_plus, pet_kind: guinea_pig, price_rub: 650, price_rub_season: 750}

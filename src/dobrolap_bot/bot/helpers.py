@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from pathlib import Path
 import re
 
 from dobrolap_bot.domain.enums import FeedingOption, PetKind
+
+
+def resolve_photo_path(path_str: str, assets_dir: Path) -> Path | None:
+    p = Path(path_str)
+    if not p.is_absolute():
+        # paths in yaml are like assets/rooms/...
+        cand = Path.cwd() / p
+        if cand.exists():
+            return cand
+        cand = assets_dir / "rooms" / p.name
+        if cand.exists():
+            return cand
+        # strip leading assets/
+        if path_str.startswith("assets/"):
+            cand = Path.cwd() / path_str
+            if cand.exists():
+                return cand
+    return p if p.exists() else None
 
 
 KIND_MAP = {
@@ -19,7 +38,7 @@ KIND_MAP = {
 }
 
 FEED_MAP = {
-    "корм владельца": FeedingOption.OWNER_FOOD,
+    "свой корм": FeedingOption.OWNER_FOOD,
     "рацион гостиницы": FeedingOption.HOTEL_RATION,
     "натуральное с приготовлением": FeedingOption.NATURAL_PORRIDGE,
     "натуральное — готовое, минимум нарезки (150 ₽/сутки)": FeedingOption.NATURAL_READY,
@@ -40,6 +59,14 @@ def parse_dates(text: str) -> tuple[date, date] | None:
     if d2 <= d1:
         return None
     return d1, d2
+
+
+def parse_single_date(text: str) -> date | None:
+    text = text.strip()
+    try:
+        return datetime.strptime(text, "%d.%m.%Y").date()
+    except ValueError:
+        return None
 
 
 def parse_time(text: str) -> time | None:

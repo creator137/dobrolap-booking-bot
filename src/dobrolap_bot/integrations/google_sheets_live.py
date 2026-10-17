@@ -8,6 +8,7 @@ until the owner confirms.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -70,22 +71,34 @@ class GoogleSheetsGateway:
         )
         self._service = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
+    _READ_RETRIES = 3
+    _READ_BACKOFF_SEC = 0.5
+
     def _values(self) -> list[list[Any]]:
         range_name = f"'{self.sheet_name}'!A:ZZ"
-        try:
-            result = (
-                self._service.spreadsheets()
-                .values()
-                .get(
-                    spreadsheetId=self.spreadsheet_id,
-                    range=range_name,
-                    valueRenderOption="UNFORMATTED_VALUE",
+        last_exc: Exception | None = None
+        for attempt in range(self._READ_RETRIES):
+            try:
+                result = (
+                    self._service.spreadsheets()
+                    .values()
+                    .get(
+                        spreadsheetId=self.spreadsheet_id,
+                        range=range_name,
+                        valueRenderOption="UNFORMATTED_VALUE",
+                    )
+                    .execute()
                 )
-                .execute()
-            )
-        except Exception as exc:
-            raise SheetsUnavailableError(f"sheets_read_failed: {exc}") from exc
-        return result.get("values", [])
+                return result.get("values", [])
+            except Exception as exc:  # transient network/API hiccup — retry with backoff
+                last_exc = exc
+                if attempt < self._READ_RETRIES - 1:
+                    logger.warning(
+                        "sheets read failed (attempt %d/%d), retrying: %s",
+                        attempt + 1, self._READ_RETRIES, exc,
+                    )
+                    time.sleep(self._READ_BACKOFF_SEC * (2 ** attempt))
+        raise SheetsUnavailableError(f"sheets_read_failed: {last_exc}") from last_exc
 
     def _rooms(self, values: list[list[Any]]) -> list[tuple[int, str]]:
         return iter_room_rows(

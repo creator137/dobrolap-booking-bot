@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -16,6 +17,8 @@ class Catalog:
         price_rules: list[PriceRule],
         deposit_base_rub: int = 2000,
         deposit_extra_pet_rub: int = 500,
+        season_periods: list[tuple[date, date]] | None = None,
+        config_dir: Path | None = None,
     ) -> None:
         self.accommodations = accommodations
         self.daily_rates = daily_rates
@@ -23,8 +26,14 @@ class Catalog:
         self.price_rules = price_rules
         self.deposit_base_rub = deposit_base_rub
         self.deposit_extra_pet_rub = deposit_extra_pet_rub
+        self.season_periods = season_periods or []
+        self.config_dir = config_dir
         self._acc_by_id = {a.id: a for a in accommodations}
         self._svc_by_id = {s.id: s for s in services}
+
+    def is_season_date(self, on_date: date) -> bool:
+        """Сезон отпусков и праздников — активные периоды из price_rules.yaml."""
+        return any(start <= on_date <= end for start, end in self.season_periods)
 
     def get_accommodation(self, unit_id: str) -> Accommodation | None:
         return self._acc_by_id.get(unit_id)
@@ -46,6 +55,7 @@ def _load_yaml(path: Path) -> dict:
 
 def load_catalog(config_dir: Path) -> Catalog:
     acc_raw = _load_yaml(config_dir / "accommodations.yaml")
+    rates_raw = _load_yaml(config_dir / "daily_rates.yaml")
     svc_raw = _load_yaml(config_dir / "services.yaml")
     rules_raw = _load_yaml(config_dir / "price_rules.yaml")
 
@@ -68,10 +78,13 @@ def load_catalog(config_dir: Path) -> Catalog:
                 resolved = config_dir.parent / resolved
             if not resolved.is_file():
                 raise FileNotFoundError(f"Photo for {unit.id} is missing: {resolved}")
-    daily_rates = [DailyRate.model_validate(x) for x in acc_raw.get("daily_rates", [])]
+    daily_rates = [DailyRate.model_validate(x) for x in rates_raw.get("daily_rates", [])]
     services = [ServiceOffering.model_validate(x) for x in svc_raw.get("services", [])]
     price_rules = [PriceRule.model_validate(x) for x in rules_raw.get("price_rules", [])]
     deposit = rules_raw.get("deposit", {})
+    season_periods = [
+        (p["date_from"], p["date_to"]) for p in rules_raw.get("season_periods", []) or []
+    ]
 
     return Catalog(
         accommodations=accommodations,
@@ -80,4 +93,6 @@ def load_catalog(config_dir: Path) -> Catalog:
         price_rules=price_rules,
         deposit_base_rub=int(deposit.get("base_rub", 2000)),
         deposit_extra_pet_rub=int(deposit.get("extra_pet_rub", 500)),
+        season_periods=season_periods,
+        config_dir=config_dir,
     )

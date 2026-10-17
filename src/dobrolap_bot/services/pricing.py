@@ -34,6 +34,7 @@ class PricingService:
         promo_eligible: bool = False,
         promo_at: date | None = None,
         arrival_time: str | None = None,
+        together: bool = True,
     ) -> PriceQuote:
         if date_to <= date_from:
             raise ValueError("date_to must be after date_from")
@@ -42,10 +43,17 @@ class PricingService:
         lines: list[QuoteLine] = []
         provisional = False
         notes: list[str] = []
+        is_season = self.catalog.is_season_date(date_from)
+        if is_season:
+            notes.append("Период заезда входит в сезон отпусков/праздников — цены по сезонному прайсу.")
 
+        multi_pet_discount_rate = 0.5 if together else 0.3
+        multi_pet_discount_pct = int(multi_pet_discount_rate * 100)
         if len(pets) > 1:
+            placement_word = "Совместное" if together else "Раздельное"
             notes.append(
-                "Совместное размещение: скидка 50% на проживание второго и каждого следующего питомца."
+                f"{placement_word} размещение: скидка {multi_pet_discount_pct}% на проживание "
+                "второго и каждого следующего питомца."
             )
 
         shared_pet_discount = 0
@@ -57,7 +65,7 @@ class PricingService:
                         scope=PriceScope.ACCOMMODATION,
                         label=f"Проживание: {unit.name} / {pet.name}",
                         amount_rub=0,
-                        detail="Тариф этого помещения не подтверждён владельцем",
+                        detail="Тариф этого помещения не подтверждён руководителем зоогостиницы",
                         provisional=True,
                     )
                 )
@@ -76,7 +84,7 @@ class PricingService:
                 )
                 continue
 
-            day_price, day_provisional, detail = self._day_amount(rate)
+            day_price, day_provisional, detail = self._day_amount(rate, use_season=is_season)
             if unit.rate_adjustment_rub:
                 day_price = max(0, day_price + unit.rate_adjustment_rub)
                 detail = (detail or "") + f"; корректировка тарифа {unit.rate_adjustment_rub:+} ₽/сутки"
@@ -95,12 +103,12 @@ class PricingService:
                 )
             )
             if pet_index > 0:
-                discount = int(amount * 0.5)
+                discount = int(amount * multi_pet_discount_rate)
                 shared_pet_discount -= discount
                 lines.append(
                     QuoteLine(
                         scope=PriceScope.DISCOUNT,
-                        label=f"Скидка 50% на размещение питомца: {pet.name}",
+                        label=f"Скидка {multi_pet_discount_pct}% на размещение питомца: {pet.name}",
                         amount_rub=-discount,
                         detail="Скидка на второго и каждого следующего питомца; лимит акции за отзывы к ней не относится",
                     )
@@ -115,7 +123,7 @@ class PricingService:
                     scope=PriceScope.FEEDING,
                     label="Натуральное питание",
                     amount_rub=amount,
-                    detail=f"{feed_rate} ₽ за сутки. Продукты предоставляет владелец либо гостиница покупает с передачей чеков.",
+                    detail=f"{feed_rate} ₽ за сутки. Продукты предоставляет хозяин питомца либо гостиница покупает с передачей чеков.",
                 )
             )
         elif feeding == FeedingOption.HOTEL_RATION:
@@ -133,7 +141,7 @@ class PricingService:
             lines.append(
                 QuoteLine(
                     scope=PriceScope.FEEDING,
-                    label="Корм владельца",
+                    label="Свой корм",
                     amount_rub=0,
                     detail="Без доплаты за корм",
                 )
@@ -181,7 +189,7 @@ class PricingService:
                 if arrival_rate is None or arrival_rate.unavailable:
                     provisional = True
                     continue
-                daily, is_provisional, _ = self._day_amount(arrival_rate)
+                daily, is_provisional, _ = self._day_amount(arrival_rate, use_season=is_season)
                 half_day_total += int(max(0, daily + unit.rate_adjustment_rub) * arrival_fraction)
                 provisional = provisional or is_provisional
             if half_day_total:
@@ -220,7 +228,7 @@ class PricingService:
         explanation_parts.extend(notes)
         if provisional:
             explanation_parts.append(
-                "Часть сумм ориентировочная и требует подтверждения владельцем."
+                "Часть сумм ориентировочная и требует подтверждения руководителем зоогостиницы."
             )
 
         return PriceQuote(
@@ -274,7 +282,16 @@ class PricingService:
             return exact[0]
         return None
 
-    def _day_amount(self, rate: DailyRate) -> tuple[int, bool, str | None]:
+    def _day_amount(self, rate: DailyRate, *, use_season: bool = False) -> tuple[int, bool, str | None]:
+        if use_season and rate.price_rub_season is not None:
+            return rate.price_rub_season, False, "Сезонная цена (отпуска/праздники)"
+        if use_season and rate.price_from_rub_season is not None:
+            upper = f"–{rate.price_to_rub_season}" if rate.price_to_rub_season else "+"
+            return (
+                rate.price_from_rub_season,
+                True,
+                f"Сезонный диапазон {rate.price_from_rub_season}{upper} ₽/сут., в расчёте нижняя граница",
+            )
         if rate.price_rub is not None:
             return rate.price_rub, False, None
         if rate.price_from_rub is not None:

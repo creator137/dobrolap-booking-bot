@@ -111,6 +111,11 @@ class DailyRate(BaseModel):
     price_rub: int | None = None
     price_from_rub: int | None = None
     price_to_rub: int | None = None
+    # Сезон отпусков и праздников (owner price list, 2026). Даты периодов — в
+    # price_rules.yaml: season_periods; пока пусто, эти цены не применяются.
+    price_rub_season: int | None = None
+    price_from_rub_season: int | None = None
+    price_to_rub_season: int | None = None
     unavailable: bool = False
 
     def matches_pet(self, pet: PetProfile, tariff_kind: str) -> bool:

@@ -43,6 +43,34 @@ def test_miniature_dog_gets_candidates(placement):
     assert "outdoor_comfort" not in ids
 
 
+def test_tariff_choice_filters_candidates(placement):
+    pet = PetProfile(
+        kind=PetKind.DOG,
+        name="Биби",
+        weight_kg=6,
+        vaccinated=True,
+        parasite_treated=True,
+    )
+    result = placement.suggest([pet], tariff_kind="comfort")
+    assert result.candidates
+    assert all(c.accommodation.tariff_kind == "comfort" for c in result.candidates)
+    assert "tariff_requested:comfort" in result.owner_flags
+
+
+def test_tariff_choice_with_no_match_returns_empty(placement):
+    pet = PetProfile(
+        kind=PetKind.DOG,
+        name="Биби",
+        weight_kg=6,
+        vaccinated=True,
+        parasite_treated=True,
+    )
+    # "economy" only allows cats — no match for a dog, confirms empty result (not a crash).
+    result = placement.suggest([pet], tariff_kind="economy")
+    assert result.candidates == []
+    assert "no_matching_units" in result.owner_flags
+
+
 def test_unvaccinated_cat_only_vip(placement):
     pet = PetProfile(
         kind=PetKind.CAT,

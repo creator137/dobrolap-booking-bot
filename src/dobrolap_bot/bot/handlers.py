@@ -29,11 +29,16 @@ from dobrolap_bot.bot.helpers import (
     normalize_phone,
     parse_age_months,
     parse_dates,
+    parse_single_date,
     parse_time,
     parse_yes,
+    resolve_photo_path,
 )
 from dobrolap_bot.bot.keyboards import (
     add_pet_kb,
+    booking_kind_kb,
+    placement_together_kb,
+    tariff_choice_kb,
     arrival_time_kb,
     behavior_kb,
     behavior_options,
@@ -57,6 +62,7 @@ from dobrolap_bot.bot.presentation import (
     format_draft_summary,
     placement_reason_label,
     status_label,
+    tariff_label,
 )
 from dobrolap_bot.bot.states import BookingForm
 from dobrolap_bot.config.loader import Catalog
@@ -117,22 +123,6 @@ def _available_services(catalog: Catalog, pets: list[PetProfile]) -> list:
     return ordered[:10]
 
 
-def _resolve_photo(path_str: str, assets_dir: Path) -> Path | None:
-    p = Path(path_str)
-    if not p.is_absolute():
-        # paths in yaml are like assets/rooms/...
-        cand = Path.cwd() / p
-        if cand.exists():
-            return cand
-        cand = assets_dir / "rooms" / p.name
-        if cand.exists():
-            return cand
-        # strip leading assets/
-        if path_str.startswith("assets/"):
-            cand = Path.cwd() / path_str
-            if cand.exists():
-                return cand
-    return p if p.exists() else None
 
 
 @router.message(CommandStart())
@@ -144,15 +134,51 @@ async def cmd_start(message: Message, state: FSMContext, llm: LlmAdapter) -> Non
         "для распознавания; результат можно проверить и исправить."
         if not isinstance(llm, DisabledLlmAdapter) else ""
     )
-    await message.answer(
-        "Здравствуйте! Я бот зоогостиницы «Добролап».\n\n"
-        "Помогу заполнить анкету, подобрать свободное место и посчитать "
-        "предварительную стоимость. Бронь подтверждает владелец вручную.\n\n"
+    welcome_text = (
+        "Добро пожаловать в дом отдыха для питомцев «Добролап»! 🐾\n"
+        "Вся информация о нас, условиях и доступных услугах — на нашем сайте:\n"
+        "🔗 https://dobrolap.clients.site/\n"
+        "Меня зовут Алёна, я основатель и ваш проводник в заботе о питомце. Кинолог, "
+        "7 лет в волонтёрстве и работы в зоомагазине.\n"
+        "Связаться со мной можно напрямую в ➡️Telegram: @alenrethf\n"
+        "➡️ ВКонтакте ID 174515997\n"
+        "➡️ aloyna777tep@gmail.com\n"
+        "➡️+79253350270➡️Telegram: @alenrethf\n"
+        "📍 Наш адрес: СНТ «Заречное», 38, Люберецкий район.\n"
+        "✅ Много положительных отзывов на картах: Яндекс.Карты и 2ГИС и сотсетях\n"
+        "✅Мы каждый день публикуем фото и видео наших гостей!\n"
+        "➡️ Наша группа ВК: https://vk.com/zoogost777\n"
+        "➡️ Telegram-канал: https://t.me/dobrolapzoo\n"
+        "Что мы предлагаем:\n"
+        "✅ Своя закрытая территория для выгула\n"
+        "✅ Индивидуальное размещение\n"
+        "✅ Полный уход: выгул 2 раза в день, кормление, игры.\n"
+        "✅ Договор✅ Зоотакси\n"
+        "Здесь каждый хвостик будет чувствовать себя как дома! ❤️\n"
+        "Ждём вас и ваших питомцев в гости!\n\n"
+        "Я бот зоогостиницы. Помогу заполнить анкету, подобрать свободное место и "
+        "посчитать предварительную стоимость. Бронь подтверждает руководитель зоогостиницы вручную.\n\n"
+        "Обязательные требования к питомцам:\n"
+        "• Обработка от паразитов — обязательна для всех.\n"
+        "• Вакцинация — обязательна для всех, кроме животных с ограничениями по здоровью "
+        "(для них предусмотрена отдельная комната).\n"
+        "В ветпаспорте должны быть отметки об обработке от паразитов (блохи + глистогонное) "
+        "и о необходимых прививках, включая бешенство.\n"
+        "Пожалуйста, сделайте прививки заранее — минимум за 2 недели до заезда.\n\n"
+        "Условия бронирования:\n"
+        "• Отмена брони: более чем за 24 часа до заезда — полный возврат; "
+        "за 24 часа и менее — возврат 50%.\n"
+        "• Полная оплата всего срока проживания — при заезде. Продление возможно по согласованию.\n"
+        "• Бронь возвращается в конце передержки как залог.\n"
+        "Для подтверждения брони нужны: ваше имя и чек об оплате брони.\n\n"
+        "Заезд и выезд: в середине дня — обеденный перерыв, точное время уточняйте у "
+        "руководителя зоогостиницы. Время заезда и выезда в индивидуальных случаях "
+        "согласовывается отдельно.\n\n"
         "Для продолжения нужно согласие на обработку данных питомца, контактных данных "
         "и адреса подачи, если вы закажете зоотакси."
-        + llm_notice,
-        reply_markup=consent_kb(),
+        + llm_notice
     )
+    await message.answer(welcome_text, reply_markup=consent_kb())
 
 
 @router.message(Command("cancel"))
@@ -211,9 +237,9 @@ async def cmd_cancel_booking(
         return
 
     await message.answer(
-        f"Запрос на отмену заявки №{booking.id} отправлен владельцу.\n"
+        f"Запрос на отмену заявки №{booking.id} отправлен руководителю зоогостиницы.\n"
         "Политика возврата залога: более чем за 24 часа — полный возврат, "
-        "за 24 часа и менее — 50%. Окончательное решение за владельцем."
+        "за 24 часа и менее — 50%. Окончательное решение за руководителем зоогостиницы."
     )
     if owner_chat_id and message.bot:
         await message.bot.send_message(
@@ -358,7 +384,7 @@ async def set_contact_from_telegram(message: Message, state: FSMContext) -> None
         return
     await state.update_data(customer_contact=phone)
     await message.answer(f"Телефон сохранён: {phone}", reply_markup=ReplyKeyboardRemove())
-    await _start_dates(message, state)
+    await _ask_booking_kind(message, state)
 
 
 @router.message(BookingForm.contact)
@@ -376,7 +402,72 @@ async def set_contact_manually(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(customer_contact=phone)
     await message.answer(f"Телефон сохранён: {phone}", reply_markup=ReplyKeyboardRemove())
-    await _start_dates(message, state)
+    await _ask_booking_kind(message, state)
+
+
+async def _ask_booking_kind(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.booking_kind)
+    await message.answer(
+        "Что вам нужно?",
+        reply_markup=booking_kind_kb(),
+    )
+
+
+@router.message(BookingForm.booking_kind)
+async def set_booking_kind(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip().lower()
+    if "передержк" in text:
+        await state.update_data(service_only=False)
+        await _start_dates(message, state)
+        return
+    if "разов" in text or "без размещен" in text:
+        await state.update_data(service_only=True)
+        await state.set_state(BookingForm.service_date)
+        await message.answer(
+            "Укажите дату визита в формате ДД.ММ.ГГГГ, например 20.11.2026.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+    await message.answer("Выберите кнопку.", reply_markup=booking_kind_kb())
+
+
+@router.message(BookingForm.service_date)
+async def set_service_date(message: Message, state: FSMContext) -> None:
+    visit_date = parse_single_date(message.text or "")
+    if visit_date is None:
+        await message.answer("Не разобрал дату. Формат: ДД.ММ.ГГГГ, например 20.11.2026.")
+        return
+    if visit_date < date.today():
+        await message.answer(f"Дата не может быть в прошлом (сегодня {date.today().strftime('%d.%m.%Y')}).")
+        return
+    await state.update_data(
+        date_from=visit_date.isoformat(),
+        date_to=(visit_date + timedelta(days=1)).isoformat(),
+    )
+    await state.set_state(BookingForm.service_time)
+    await message.answer("Во сколько ожидать специалиста? Например: 14:00.")
+
+
+@router.message(BookingForm.service_time)
+async def set_service_time(message: Message, state: FSMContext) -> None:
+    visit_time = parse_time(message.text or "")
+    if visit_time is None:
+        await message.answer("Не разобрал время. Формат ЧЧ:ММ, например 14:00.")
+        return
+    await state.update_data(arrival_time=visit_time.strftime("%H:%M"))
+    await state.set_state(BookingForm.service_address)
+    await message.answer("По какому адресу нужна услуга?")
+
+
+@router.message(BookingForm.service_address)
+async def set_service_address(message: Message, state: FSMContext) -> None:
+    address = (message.text or "").strip()
+    if len(address) < 3:
+        await message.answer("Напишите адрес текстом.")
+        return
+    await state.update_data(service_address=address)
+    await state.set_state(BookingForm.pet_kind)
+    await message.answer("Кто ваш питомец?", reply_markup=pet_kind_kb())
 
 
 @router.callback_query(BookingForm.dates, F.data == "cal:noop")
@@ -494,11 +585,21 @@ async def set_pet_kind(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(draft_kind=kind.value)
     await state.set_state(BookingForm.pet_name)
-    note = (
-        " Для птиц и грызунов обязательно нужна собственная клетка."
-        if kind in {PetKind.BIRD, PetKind.RABBIT, PetKind.RAT, PetKind.HAMSTER, PetKind.GUINEA_PIG}
-        else ""
-    )
+    if kind in {PetKind.BIRD, PetKind.RABBIT, PetKind.RAT, PetKind.HAMSTER, PetKind.GUINEA_PIG}:
+        note = " Для птиц и грызунов обязательно нужна собственная клетка."
+    elif kind == PetKind.DOG:
+        note = (
+            "\n\n‼️Для собак просим привезти: корм, амуницию, ветпаспорт, "
+            "(по желанию: средства гигиены, любимые игрушки....)"
+        )
+    elif kind == PetKind.CAT:
+        note = (
+            "\n\n‼️ Для кошек с собой просим привезти: ветпаспорт, привычный корм, "
+            "лоток с наполнителем, миски и любимые вещи питомца, по необходимости шампунь "
+            "или средство для медухода или витамины ( всё необходимое)"
+        )
+    else:
+        note = ""
     await message.answer("Кличка питомца?" + note)
 
 
@@ -734,15 +835,15 @@ async def set_behavior_text(message: Message, state: FSMContext, llm: LlmAdapter
         signals = await llm.extract_pet_signals(raw, field="behavior")
     except LlmUnavailableError:
         await message.answer(
-            "Текст сохранил для владельца. Автоматический разбор сейчас недоступен. "
-            "Отметьте известные особенности кнопками; остальные владелец увидит в заявке.",
+            "Текст сохранил для руководителя зоогостиницы. Автоматический разбор сейчас недоступен. "
+            "Отметьте известные особенности кнопками; остальные руководитель зоогостиницы увидит в заявке.",
             reply_markup=behavior_kb(kind),
         )
         return
     selected = (set(signals.behavior_flags) & set(behavior_options(kind))) if not signals.needs_clarification else set()
     await state.update_data(draft_behavior_selected=sorted(selected))
     labels = ", ".join(BEHAVIOR_LABELS[key] for key in sorted(selected)) or "явных особенностей не выделено"
-    suffix = "\nЕсли смысл не передан полностью, исправьте кнопками: исходный текст сохранён для владельца."
+    suffix = "\nЕсли смысл не передан полностью, исправьте кнопками: исходный текст сохранён для руководителя зоогостиницы."
     if signals.needs_clarification:
         suffix = "\nФормулировка неоднозначна: отметьте нужные пункты кнопками или уточните текст. Исходный текст сохранён."
     await state.set_state(BookingForm.pet_behavior_review)
@@ -784,7 +885,7 @@ async def set_health(message: Message, state: FSMContext, llm: LlmAdapter) -> No
         flags = []
         await message.answer(
             "Автоматический разбор недоступен. Сохраню ваше описание дословно "
-            "и передам владельцу на ручную проверку."
+            "и передам руководителю зоогостиницы на ручную проверку."
         )
     await state.update_data(draft_health_candidate=health, draft_health_flags_candidate=flags)
     await state.set_state(BookingForm.pet_health_review)
@@ -809,7 +910,7 @@ async def _finish_health(message: Message, state: FSMContext, *, health: str | N
         "• вакцинация, включая бешенство;\n"
         "• обработки от паразитов.\n"
         "Можно несколько фото. Когда закончите — «Готово».\n"
-        "Если фото нет — «Без фото» (заявка уйдёт владельцу как неполная).",
+        "Если фото нет — «Без фото» (заявка уйдёт руководителю зоогостиницы как неполная).",
         reply_markup=passport_kb(),
     )
 
@@ -882,7 +983,7 @@ async def passport_done(message: Message, state: FSMContext) -> None:
         await message.answer(
             "Пришлите страницы с данными питомца и владельца, вакцинацией (включая бешенство) "
             "и обработками от паразитов — или нажмите «Готово».\n"
-            "Если фото нет — «Без фото» (заявка уйдёт владельцу как неполная).",
+            "Если фото нет — «Без фото» (заявка уйдёт руководителю зоогостиницы как неполная).",
             reply_markup=passport_kb(),
         )
         return
@@ -893,7 +994,7 @@ async def passport_done(message: Message, state: FSMContext) -> None:
     if not passport_ids:
         incomplete_flags.append(f"incomplete_passport:{data.get('draft_name') or '?'}")
         await message.answer(
-            "Фото паспорта нет — помечу заявку как неполную для владельца."
+            "Фото паспорта нет — помечу заявку как неполную для руководителя зоогостиницы."
         )
 
     await state.update_data(
@@ -917,9 +1018,90 @@ async def add_another(
         await message.answer("Кто следующий питомец?", reply_markup=pet_kind_kb())
         return
     if "подбор" in text or "далее" in text:
-        await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
+        data = await state.get_data()
+        if data.get("service_only"):
+            flags = sorted(set(data.get("placement_flags") or []) | {"service_only"})
+            await state.update_data(unit_id=None, manual_matching=False, placement_flags=flags)
+            await message.answer(
+                "Размещение не нужно — переходим к выбору услуг.", reply_markup=ReplyKeyboardRemove()
+            )
+            await _ask_services(message, state, catalog)
+            return
+        await _ask_tariff_choice(message, state, catalog)
         return
     await message.answer("Выберите кнопку.", reply_markup=add_pet_kb())
+
+
+def _tariff_choice_labels(catalog: Catalog) -> list[str]:
+    tariffs = sorted({a.tariff_kind for a in catalog.active_accommodations()})
+    return [tariff_label(t) for t in tariffs]
+
+
+async def _ask_tariff_choice(message: Message, state: FSMContext, catalog: Catalog) -> None:
+    labels = _tariff_choice_labels(catalog)
+    await state.set_state(BookingForm.tariff_choice)
+    await message.answer(
+        "Какой тариф размещения вас интересует? Если не уверены — выберите «Любой "
+        "подходящий», и я подберу по анкете питомца.",
+        reply_markup=tariff_choice_kb(labels),
+    )
+
+
+@router.message(BookingForm.tariff_choice)
+async def set_tariff_choice(
+    message: Message,
+    state: FSMContext,
+    catalog: Catalog,
+    sheets: SheetsGateway,
+    booking_service: BookingService,
+    assets_dir: Path,
+) -> None:
+    text = (message.text or "").strip()
+    label_to_tariff = {tariff_label(t): t for t in {a.tariff_kind for a in catalog.active_accommodations()}}
+    if text == "Любой подходящий":
+        tariff_kind = None
+    elif text in label_to_tariff:
+        tariff_kind = label_to_tariff[text]
+    else:
+        await message.answer(
+            "Выберите тариф кнопкой.", reply_markup=tariff_choice_kb(_tariff_choice_labels(catalog))
+        )
+        return
+    await state.update_data(tariff_choice=tariff_kind)
+
+    data = await state.get_data()
+    pets_count = len(data.get("pets") or [])
+    if pets_count > 1:
+        await state.set_state(BookingForm.placement_together)
+        await message.answer(
+            "Питомцев несколько — разместить их вместе в одном помещении или раздельно?\n"
+            "Вместе: скидка 50% на второго и каждого следующего питомца.\n"
+            "Раздельно: скидка 30% на второго и каждого следующего питомца, "
+            "помещения подбирает руководитель зоогостиницы.",
+            reply_markup=placement_together_kb(),
+        )
+        return
+    await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
+
+
+@router.message(BookingForm.placement_together)
+async def set_placement_together(
+    message: Message,
+    state: FSMContext,
+    catalog: Catalog,
+    sheets: SheetsGateway,
+    booking_service: BookingService,
+    assets_dir: Path,
+) -> None:
+    text = (message.text or "").strip().lower()
+    if text not in {"вместе", "раздельно"}:
+        await message.answer("Выберите кнопку: «Вместе» или «Раздельно».", reply_markup=placement_together_kb())
+        return
+    together = text == "вместе"
+    data = await state.get_data()
+    flags = sorted(set(data.get("placement_flags") or []) | (set() if together else {"separate_placement"}))
+    await state.update_data(placement_together=together, placement_flags=flags)
+    await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
 
 
 async def _run_placement(
@@ -935,9 +1117,11 @@ async def _run_placement(
     date_from = date.fromisoformat(data["date_from"])
     date_to = date.fromisoformat(data["date_to"])
     nights = (date_to - date_from).days
+    together = data.get("placement_together", True)
+    tariff_kind = data.get("tariff_choice")
 
     try:
-        occupied = booking_service.occupied_catalog_ids(date_from, date_to)
+        occupied_labels = booking_service.fetch_occupied_labels(date_from, date_to)
     except SheetsUnavailableError as exc:
         logger.exception(
             "availability check failed date_from=%s date_to=%s", date_from, date_to
@@ -951,18 +1135,34 @@ async def _run_placement(
             client_text = (
                 f"В календаре занятости нет столбцов на даты "
                 f"{date_from.strftime('%d.%m.%Y')}–{date_to.strftime('%d.%m.%Y')}.\n"
-                "Свободное место проверить нельзя — заявку отправлю владельцу на ручной подбор.\n\n"
+                "Свободное место проверить нельзя — заявку отправлю руководителю зоогостиницы на ручной подбор.\n\n"
                 "Как будем кормить?"
             )
         else:
             client_text = (
                 "Календарь занятости сейчас недоступен — не могу показать свободные места.\n"
-                "Заявку отправлю владельцу на ручной подбор.\n\nКак будем кормить?"
+                "Заявку отправлю руководителю зоогостиницы на ручной подбор.\n\nКак будем кормить?"
             )
         await message.answer(client_text, reply_markup=feeding_kb())
         return
 
-    result = PlacementService(catalog).suggest(pets, occupied_unit_ids=occupied)
+    occupied = booking_service.occupied_catalog_ids_from_labels(occupied_labels)
+
+    if len(pets) > 1 and not together:
+        # Separate rooms per pet — the shared-unit matcher below only finds one
+        # accommodation that fits every pet at once, which doesn't apply here.
+        await state.update_data(unit_id=None, manual_matching=True)
+        await state.set_state(BookingForm.feeding)
+        await message.answer(
+            "Для раздельного размещения помещения каждому питомцу подберёт руководитель "
+            "зоогостиницы вручную.\n\nКак будем кормить?",
+            reply_markup=feeding_kb(),
+        )
+        return
+
+    result = PlacementService(catalog).suggest(
+        pets, occupied_unit_ids=occupied, tariff_kind=tariff_kind
+    )
     flags = sorted(set(data.get("placement_flags") or []) | set(result.owner_flags))
     await state.update_data(
         placement_flags=flags,
@@ -972,9 +1172,14 @@ async def _run_placement(
     if not result.candidates:
         await state.update_data(unit_id=None, manual_matching=True)
         await state.set_state(BookingForm.feeding)
+        no_match_text = (
+            f"В тарифе «{tariff_label(tariff_kind)}» свободных мест под вашего питомца не нашёл. "
+            if tariff_kind
+            else "Автоматически подходящих свободных мест не нашёл. "
+        )
         await message.answer(
-            "Автоматически подходящих свободных мест не нашёл. "
-            "Заявку всё равно отправлю владельцу на ручной подбор.\n\n"
+            no_match_text
+            + "Заявку всё равно отправлю руководителю зоогостиницы на ручной подбор.\n\n"
             "Как будем кормить?",
             reply_markup=feeding_kb(),
         )
@@ -988,17 +1193,9 @@ async def _run_placement(
     for i, cand in enumerate(result.candidates, 1):
         acc = cand.accommodation
         try:
-            label = booking_service.resolve_free_sheet_label(acc.id, date_from, date_to)
+            label = booking_service.free_sheet_label_from_labels(acc.id, occupied_labels)
         except ValueError:
             continue  # Occupancy changed since the first calendar read.
-        except SheetsUnavailableError:
-            await state.update_data(unit_id=None, manual_matching=True)
-            await state.set_state(BookingForm.feeding)
-            await message.answer(
-                "Календарь стал недоступен. Передам заявку владельцу на ручной подбор. "
-                "Как будем кормить?", reply_markup=feeding_kb(),
-            )
-            return
         offered_labels[acc.id] = label
         quote = pricing.quote(
             pets=pets,
@@ -1007,6 +1204,7 @@ async def _run_placement(
             date_to=date_to,
             feeding=FeedingOption.OWNER_FOOD,
             arrival_time=data.get("arrival_time"),
+            together=together,
         )
         day_hint = quote.total_rub // nights if nights else quote.total_rub
         price_text = (
@@ -1020,15 +1218,15 @@ async def _run_placement(
                 placement_reason_label(reason) for reason in cand.reasons[:2]
             )
         if quote.provisional or cand.requires_owner_review:
-            caption += "\n⚠️ требует подтверждения владельцем"
+            caption += "\n⚠️ требует подтверждения руководителем зоогостиницы"
         if acc.photo_paths_by_species and len(acc.calendar_labels()) > 1:
-            caption += "\nФото показывает тип размещения; конкретный бокс подтвердит владелец."
+            caption += "\nФото показывает тип размещения; конкретный бокс подтвердит руководитель зоогостиницы."
 
         choices.append((acc.id, f"{i}. {acc.name} — {quote.total_rub} ₽" if quote.has_accommodation_amount else f"{i}. {acc.name} — расчёт оператора"))
 
         photos = []
         for path_str in acc.photos_for(pets, sheet_label=label)[:5]:
-            resolved = _resolve_photo(path_str, assets_dir)
+            resolved = resolve_photo_path(path_str, assets_dir)
             if resolved:
                 photos.append(resolved)
         if photos:
@@ -1060,7 +1258,7 @@ async def _run_placement(
         await state.update_data(unit_id=None, manual_matching=True)
         await state.set_state(BookingForm.feeding)
         await message.answer(
-            "Свободные варианты изменились. Передам заявку владельцу на ручной подбор. "
+            "Свободные варианты изменились. Передам заявку руководителю зоогостиницы на ручной подбор. "
             "Как будем кормить?", reply_markup=feeding_kb(),
         )
         return
@@ -1107,6 +1305,10 @@ async def set_feeding(message: Message, state: FSMContext, catalog: Catalog) -> 
             reply_markup=feeding_source_kb(),
         )
         return
+    await _ask_services(message, state, catalog)
+
+
+async def _ask_services(message: Message, state: FSMContext, catalog: Catalog) -> None:
     await state.set_state(BookingForm.services)
     data = await state.get_data()
     pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
@@ -1139,19 +1341,7 @@ async def set_feeding_source(message: Message, state: FSMContext, catalog: Catal
         await message.answer("Выберите, кто предоставляет продукты.", reply_markup=feeding_source_kb())
         return
     await state.update_data(natural_food_source=source)
-    await state.set_state(BookingForm.services)
-    data = await state.get_data()
-    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
-    items = [(s.id, s.name, False) for s in _available_services(catalog, pets)]
-    if not items:
-        await state.set_state(BookingForm.promo)
-        await message.answer("Дополнительных услуг для выбранных питомцев нет. Есть промокод? Пришлите его или нажмите «Нет»." + REVIEW_AND_VOLUNTEER_INFO, reply_markup=no_kb())
-        return
-    await message.answer(
-        "Дополнительные услуги (можно несколько). Стоимость каждой услуги оператор сообщит отдельно. "
-        "Если выберете зоотакси, попрошу адрес для расчёта поездки. Нажмите «Готово», когда закончите.",
-        reply_markup=services_kb(items),
-    )
+    await _ask_services(message, state, catalog)
 
 
 @router.callback_query(BookingForm.services, F.data.startswith("svc:"))
@@ -1237,7 +1427,7 @@ async def set_promo(
             await message.answer(
                 "Этот промокод действует только на первое размещение. "
                 "По вашему аккаунту уже есть действующая или подтверждённая заявка. "
-                "Если это ошибка, сообщите владельцу; продолжить можно без промокода."
+                "Если это ошибка, сообщите руководителю зоогостиницы; продолжить можно без промокода."
             )
             return
         await message.answer("Промокод принят. Если есть отзыв, пришлите его скриншот после предварительного расчёта; оператор проверит сочетание скидок.")
@@ -1292,6 +1482,7 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
                 promo_code=promo,
                 promo_eligible=bool(data.get("promo_verified")),
                 arrival_time=data.get("arrival_time"),
+                together=data.get("placement_together", True),
             )
             if data.get("review_discount_claim"):
                 quote.provisional = True
@@ -1357,12 +1548,15 @@ async def submit_yes(
             review_discount_claim=bool(data.get("review_discount_claim")),
             review_proof_file_id=data.get("review_proof_file_id"),
             review_proof_is_document=bool(data.get("review_proof_is_document")),
+            placement_together=bool(data.get("placement_together", True)),
+            service_only=bool(data.get("service_only")),
+            service_address=data.get("service_address"),
         )
     except SheetsUnavailableError:
         logger.exception("booking submit failed: Sheets unavailable")
         await callback.message.answer(
             "Календарь недоступен — заявку сейчас сохранить с проверкой занятости нельзя. "
-            "Попробуйте позже или напишите владельцу напрямую."
+            "Попробуйте позже или напишите руководителю зоогостиницы напрямую."
         )
         await callback.answer()
         return
@@ -1394,7 +1588,11 @@ async def submit_yes(
         await callback.bot.send_message(
             owner_chat_id,
             summary,
-            reply_markup=owner_actions_kb(booking.id, has_unit=bool(booking.unit_id)),
+            reply_markup=owner_actions_kb(
+                booking.id,
+                has_unit=bool(booking.unit_id),
+                service_only=bool(booking.payload.get("service_only")),
+            ),
         )
         for pet in pets:
             ids = list(pet.passport_file_ids or [])
@@ -1438,13 +1636,13 @@ async def submit_yes(
             except Exception:
                 logger.exception("Could not forward review proof for booking %s", booking.id)
         await callback.message.answer(
-            f"Заявка №{booking.id} отправлена владельцу.\n"
+            f"Заявка №{booking.id} отправлена руководителю зоогостиницы.\n"
             "Ожидайте решения. Реквизиты придут только после подтверждения.\n"
             "Статус: /status"
         )
     else:
         await callback.message.answer(
-            "Заявка сохранена, но уведомление владельцу сейчас недоступно. "
+            "Заявка сохранена, но уведомление руководителю зоогостиницы сейчас недоступно. "
             "Пожалуйста, свяжитесь с зоогостиницей напрямую."
         )
 
@@ -1504,7 +1702,7 @@ async def _accept_receipt(
         return True
 
     await message.answer(
-        "Чек получил и передал владельцу на проверку. "
+        "Чек получил и передал руководителю зоогостиницы на проверку. "
         "После подтверждения оплаты бронь будет зафиксирована."
     )
     if owner_chat_id and message.bot:
@@ -1622,7 +1820,7 @@ async def client_reply_start(callback: CallbackQuery, state: FSMContext) -> None
     booking_id = callback.data.split(":")[-1]
     await state.set_state(BookingForm.reply_to_owner)
     await state.update_data(booking_id=booking_id)
-    await callback.message.answer("Напишите ответ владельцу одним сообщением.")
+    await callback.message.answer("Напишите ответ руководителю зоогостиницы одним сообщением.")
     await callback.answer()
 
 
@@ -1649,8 +1847,10 @@ async def client_reply_send(
             owner_chat_id,
             f"💬 Ответ клиента по заявке {booking_id}:\n{text}",
             reply_markup=owner_actions_kb(
-                booking_id, has_unit=bool(booking and booking.unit_id)
+                booking_id,
+                has_unit=bool(booking and booking.unit_id),
+                service_only=bool(booking and booking.payload.get("service_only")),
             ),
         )
-    await message.answer("Ответ отправил владельцу.")
+    await message.answer("Ответ отправил руководителю зоогостиницы.")
     await state.clear()

@@ -180,6 +180,22 @@ def test_group_price_applies_confirmed_fifty_percent_discount(pricing, catalog):
     assert "50%" in quote.explanation
 
 
+def test_separate_placement_applies_thirty_percent_discount(pricing, catalog):
+    pets = [
+        PetProfile(kind=PetKind.DOG, name="A", weight_kg=6),
+        PetProfile(kind=PetKind.DOG, name="B", weight_kg=6),
+    ]
+    quote = pricing.quote(
+        pets=pets, unit=catalog.get_accommodation("comfort"),
+        date_from=date(2026, 10, 10), date_to=date(2026, 10, 12),
+        together=False,
+    )
+    discounts = [line for line in quote.lines if line.scope == PriceScope.DISCOUNT]
+    assert [line.amount_rub for line in discounts] == [-1140]
+    assert "30%" in quote.explanation
+    assert "Раздельное" in quote.explanation
+
+
 @pytest.mark.parametrize("unit_id,expected_percent", [
     ("second_floor_a_plus_a", 20),
     ("seasonal_vip_under_stairs", 20),

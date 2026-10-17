@@ -67,18 +67,7 @@ price_rules:
     active: false  # placeholder code — enable only after owner confirms real promo code
     description: "Временная акция 5% на проживание, однократно, не суммируется (до 2026-11-01)"
 
-  # Holidays / early booking — placeholders, inactive until owner provides numbers
-  - id: holiday_placeholder
-    scope: surcharge
-    condition:
-      tag: holiday
-    percent: null
-    amount_rub: null
-    priority: 50
-    stackable: true
-    active: false
-    description: "Праздничный тариф — даты и коэффициент уточнить"
-
+  # Early booking — placeholder, inactive until owner provides numbers
   - id: early_booking_placeholder
     scope: discount
     condition:
@@ -88,3 +77,12 @@ price_rules:
     stackable: false
     active: false
     description: "Скидка за раннее бронирование — условия уточнить"
+
+# Сезон отпусков и праздников 2026 (owner price list от 12.10.2026/13.10.2026):
+# абсолютные цены уже внесены в config/accommodations.yaml (price_rub_season и т.п.).
+# Здесь не хватает только конкретных календарных периодов — список пуст, пока
+# владелец не пришлёт даты (например, новогодние каникулы, майские праздники).
+# Как только период добавлен, PricingService.quote() сам начнёт применять
+# сезонные цены для бронирований с заездом в этом диапазоне.
+season_periods: []
+  # - {date_from: 2026-12-28, date_to: 2027-01-08}

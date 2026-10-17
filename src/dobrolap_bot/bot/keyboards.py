@@ -99,10 +99,35 @@ def add_pet_kb() -> ReplyKeyboardMarkup:
     )
 
 
+def placement_together_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Вместе"), KeyboardButton(text="Раздельно")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def booking_kind_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Передержка (размещение)")],
+            [KeyboardButton(text="Разовая услуга без размещения")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def tariff_choice_kb(labels: list[str]) -> ReplyKeyboardMarkup:
+    rows = [[KeyboardButton(text=label)] for label in labels]
+    rows.append([KeyboardButton(text="Любой подходящий")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def feeding_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Корм владельца")],
+            [KeyboardButton(text="Свой корм")],
             [KeyboardButton(text="Рацион гостиницы")],
             [KeyboardButton(text="Натуральное — готовое, минимум нарезки (150 ₽/сутки)")],
             [KeyboardButton(text="Натуральное — приготовить кашу (250 ₽/сутки)")],
@@ -204,7 +229,7 @@ def services_kb(items: list[tuple[str, str, bool]]) -> InlineKeyboardMarkup:
 def submit_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Отправить владельцу", callback_data="submit:yes")],
+            [InlineKeyboardButton(text="Отправить руководителю", callback_data="submit:yes")],
             [InlineKeyboardButton(text="Отменить заявку", callback_data="submit:no")],
         ]
     )
@@ -215,6 +240,7 @@ OWNER_MENU_PENDING = "⏳ Ждут решения"
 OWNER_MENU_UNPAID = "💳 Ждут оплату"
 OWNER_MENU_CONFIRMED = "✅ Подтверждённые"
 OWNER_MENU_CLIENTS = "👥 Клиенты"
+OWNER_MENU_PRICES = "💰 Прайсы"
 
 
 def owner_menu_kb() -> ReplyKeyboardMarkup:
@@ -223,7 +249,7 @@ def owner_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=OWNER_MENU_HOME), KeyboardButton(text=OWNER_MENU_PENDING)],
             [KeyboardButton(text=OWNER_MENU_UNPAID), KeyboardButton(text=OWNER_MENU_CONFIRMED)],
-            [KeyboardButton(text=OWNER_MENU_CLIENTS)],
+            [KeyboardButton(text=OWNER_MENU_CLIENTS), KeyboardButton(text=OWNER_MENU_PRICES)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -256,20 +282,22 @@ def owner_admin_bookings_kb(items: list[tuple[str, str]]) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def owner_actions_kb(booking_id: str, *, has_unit: bool = True) -> InlineKeyboardMarkup:
+def owner_actions_kb(
+    booking_id: str, *, has_unit: bool = True, service_only: bool = False
+) -> InlineKeyboardMarkup:
     unit_btn = (
         "🔁 Другой вариант"
         if has_unit
         else "🏠 Выбрать помещение"
     )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"own:approve:{booking_id}")],
-            [InlineKeyboardButton(text="❓ Задать вопрос", callback_data=f"own:ask:{booking_id}")],
-            [InlineKeyboardButton(text=unit_btn, callback_data=f"own:alt:{booking_id}")],
-            [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"own:reject:{booking_id}")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"own:approve:{booking_id}")],
+        [InlineKeyboardButton(text="❓ Задать вопрос", callback_data=f"own:ask:{booking_id}")],
+    ]
+    if not service_only:
+        rows.append([InlineKeyboardButton(text=unit_btn, callback_data=f"own:alt:{booking_id}")])
+    rows.append([InlineKeyboardButton(text="❌ Отклонить", callback_data=f"own:reject:{booking_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def owner_unit_choice_kb(
@@ -331,7 +359,11 @@ def owner_cancel_kb(booking_id: str) -> InlineKeyboardMarkup:
 
 
 def owner_booking_kb(
-    booking_id: str, status: BookingStatus | str, *, has_unit: bool = True
+    booking_id: str,
+    status: BookingStatus | str,
+    *,
+    has_unit: bool = True,
+    service_only: bool = False,
 ) -> InlineKeyboardMarkup | None:
     """Owner card actions matching the booking's current status.
 
@@ -340,7 +372,7 @@ def owner_booking_kb(
     """
     status = BookingStatus(status)
     if status == BookingStatus.WAITING_OWNER:
-        return owner_actions_kb(booking_id, has_unit=has_unit)
+        return owner_actions_kb(booking_id, has_unit=has_unit, service_only=service_only)
     if status in (BookingStatus.OWNER_APPROVED, BookingStatus.WAITING_PAYMENT):
         return owner_paid_kb(booking_id)
     if status == BookingStatus.CONFIRMED:
@@ -373,6 +405,6 @@ def owner_refund_kb(booking_id: str) -> InlineKeyboardMarkup:
 def client_reply_kb(booking_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Ответить владельцу", callback_data=f"cli:reply:{booking_id}")]
+            [InlineKeyboardButton(text="Ответить руководителю", callback_data=f"cli:reply:{booking_id}")]
         ]
     )
