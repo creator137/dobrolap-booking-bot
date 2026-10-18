@@ -57,20 +57,15 @@ def _arrival_row(times: list[str]) -> list[InlineKeyboardButton]:
 
 
 def arrival_time_kb() -> InlineKeyboardMarkup:
-    """Common arrival slots grouped by price rule; free text remains available."""
+    """Regular reception windows; exceptions are requested separately."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✓ Без доплаты · 19:00–21:00", callback_data="arr:noop")],
             _arrival_row(["19:00", "19:30", "20:00"]),
             _arrival_row(["20:30", "21:00"]),
-            [InlineKeyboardButton(text="½ 50% суток · 16:30–19:00", callback_data="arr:noop")],
-            _arrival_row(["16:30", "17:00", "17:30"]),
-            _arrival_row(["18:00", "18:30"]),
             [InlineKeyboardButton(text="☀ Полные сутки · 08:00–11:00", callback_data="arr:noop")],
             _arrival_row(["08:00", "09:00", "10:00", "11:00"]),
-            [InlineKeyboardButton(text="⏱ Рано / поздно · +15%/час", callback_data="arr:noop")],
-            _arrival_row(["07:00", "21:30", "22:00"]),
-            [InlineKeyboardButton(text="✏️ Другое время", callback_data="arr:text")],
+            [InlineKeyboardButton(text="Другое время — по согласованию", callback_data="arr:text")],
         ]
     )
 
@@ -112,6 +107,17 @@ def booking_kind_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Передержка (размещение)")],
             [KeyboardButton(text="Разовая услуга без размещения")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def service_location_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Выезд на дом (зооняня)")],
+            [KeyboardButton(text="В зоогостиницу на груминг")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,

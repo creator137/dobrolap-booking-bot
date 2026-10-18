@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from dobrolap_bot.config.loader import load_catalog
-from dobrolap_bot.bot.handlers import _accept_receipt
+from dobrolap_bot.bot.handlers import HOTEL_ADDRESS, _accept_receipt
+from dobrolap_bot.bot.presentation import format_draft_summary
 from dobrolap_bot.domain.enums import BookingStatus, FeedingOption, PetKind
 from dobrolap_bot.domain.models import PetProfile
 from dobrolap_bot.integrations.google_sheets import InMemorySheetsGateway, SheetBooking
@@ -40,6 +41,43 @@ def _pet() -> PetProfile:
         vaccinated=True,
         parasite_treated=True,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("location", ["home", "hotel"])
+async def test_service_location_survives_save_and_is_visible_to_both_parties(booking_service, catalog, location):
+    address = HOTEL_ADDRESS if location == "hotel" else "Тестовая улица, дом 12"
+    booking, quote = await booking_service.submit_booking(
+        telegram_user_id=111,
+        customer_name="Тест",
+        username=None,
+        consent_at=datetime.now(timezone.utc),
+        date_from=date(2026, 11, 1), date_to=date(2026, 11, 2),
+        pets=[_pet()], unit_id=None, feeding=None,
+        service_ids=["nail_trim"], placement_flags=["service_only"],
+        manual_matching=False, service_only=True,
+        arrival_time="18:00", service_address=address,
+        service_details={"service_location": location},
+    )
+    stored = await booking_service.get(booking.id)
+    assert stored.payload["service_details"]["service_location"] == location
+    assert quote is None
+    expected = "В зоогостинице — груминг" if location == "hotel" else "Выезд на дом (зооняня)"
+    for text in (
+        format_owner_summary(stored, catalog),
+        format_client_status(stored, catalog),
+        format_draft_summary(
+            data={**stored.payload, "date_from": "2026-11-01", "date_to": "2026-11-02"},
+            pets=[_pet()], catalog=catalog, quote=None,
+        ),
+    ):
+        assert expected in text
+        assert address in text
+        assert "200 ₽" in text and "350 ₽" in text
+        assert "технический перерыв" not in text  # Boarding rules do not apply to service appointments.
+    approved = await booking_service.approve(stored.id)
+    assert approved.status == BookingStatus.WAITING_PAYMENT
+    assert not booking_service.sheets.list_bookings()
 
 
 @pytest.mark.asyncio

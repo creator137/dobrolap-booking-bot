@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from dobrolap_bot.config.loader import Catalog
 from dobrolap_bot.domain.enums import BookingStatus, FeedingOption, PetKind
-from dobrolap_bot.domain.models import PetProfile, PriceQuote
+from dobrolap_bot.domain.models import PetProfile, PriceQuote, ServiceOffering
 from dobrolap_bot.repositories.sqlite import BookingRecord
+from dobrolap_bot.services.arrival import arrival_price_notice
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
@@ -233,12 +234,42 @@ def _pet_lines(pet: PetProfile, *, prefix: str = "") -> list[str]:
     return lines
 
 
+def service_option_label(service: ServiceOffering) -> str:
+    low, high = service.price_from_rub, service.price_to_rub
+    if low is not None and high is not None and low != high:
+        price = f"{format_money(low)}–{format_money(high)}"
+    elif low is not None:
+        price = f"от {format_money(low)}" if high is None else format_money(low)
+    elif high is not None:
+        price = f"до {format_money(high)}"
+    else:
+        price = "по согласованию"
+    unit = {"per_day": "/сутки", "visit": "/визит", "session": "/занятие", "one_way": "/в одну сторону"}.get(service.unit, "")
+    return f"{service.name} — {price}{unit}"
+
+
+def _service_location_text(data: dict) -> str:
+    location = data.get("service_location") or (data.get("service_details") or {}).get("service_location")
+    return {
+        "home": "Выезд на дом (зооняня)",
+        "hotel": "В зоогостинице — груминг",
+    }.get(location, "Место услуги: уточняется")
+
+
+def _arrival_notice(data: dict) -> str:
+    try:
+        value = time.fromisoformat(data.get("arrival_time") or "")
+    except ValueError:
+        return ""
+    return arrival_price_notice(value)
+
+
 def _services_text(service_ids: list[str], catalog: Catalog) -> str:
     names = []
     for service_id in service_ids:
         service = catalog.get_service(service_id)
         if service:
-            names.append(service.name)
+            names.append(service_option_label(service))
     return ", ".join(names) if names else "Не выбраны"
 
 
@@ -265,9 +296,11 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
         lines.append(f"Дата визита: {format_date(booking.date_from)}")
         lines.append(f"Время визита: {booking.payload.get('arrival_time') or 'Не указано'}")
         lines.append(f"Адрес: {booking.payload.get('service_address') or 'Не указан'}")
+        lines.append(_service_location_text(booking.payload))
     else:
         lines.append(f"Даты: {format_date(booking.date_from)} — {format_date(booking.date_to)}")
         lines.append(f"Время заезда: {booking.payload.get('arrival_time') or 'Не указано'}")
+        lines.append(_arrival_notice(booking.payload))
     lines.append("")
     lines.append("Питомцы")
     if pets:
@@ -334,9 +367,11 @@ def format_client_status(booking: BookingRecord, catalog: Catalog) -> str:
         lines.append(f"Дата визита: {format_date(booking.date_from)}")
         lines.append(f"Время визита: {booking.payload.get('arrival_time') or 'Не указано'}")
         lines.append(f"Адрес: {booking.payload.get('service_address') or 'Не указан'}")
+        lines.append(_service_location_text(booking.payload))
     else:
         lines.append(f"Даты: {format_date(booking.date_from)} — {format_date(booking.date_to)}")
         lines.append(f"Время заезда: {booking.payload.get('arrival_time') or 'Не указано'}")
+        lines.append(_arrival_notice(booking.payload))
     lines.append(
         f"Питомцы: {pet_names}"
         + (
@@ -371,12 +406,14 @@ def format_draft_summary(
         lines.append(f"Дата визита: {format_date(date.fromisoformat(data['date_from']))}")
         lines.append(f"Время визита: {data.get('arrival_time') or 'Не указано'}")
         lines.append(f"Адрес: {data.get('service_address') or 'Не указан'}")
+        lines.append(_service_location_text(data))
     else:
         lines.append(
             f"Даты: {format_date(date.fromisoformat(data['date_from']))} — "
             f"{format_date(date.fromisoformat(data['date_to']))}"
         )
         lines.append(f"Время заезда: {data.get('arrival_time') or 'Не указано'}")
+        lines.append(_arrival_notice(data))
     lines.append("")
     lines.append("Питомцы")
     for index, pet in enumerate(pets, 1):
@@ -415,7 +452,7 @@ def format_draft_summary(
     else:
         lines.append(f"Залог: {format_money(data.get('deposit_amount'))}")
         lines.append("Стоимость проживания сообщит руководитель зоогостиницы после подбора помещения.")
-    if data.get("service_ids"):
+    if data.get("service_ids") and not service_only:
         lines.append("Стоимость дополнительных услуг сообщит оператор отдельно.")
     return "\n".join(lines)
 

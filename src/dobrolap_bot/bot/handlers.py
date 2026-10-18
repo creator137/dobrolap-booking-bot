@@ -54,15 +54,18 @@ from dobrolap_bot.bot.keyboards import (
     passport_kb,
     pet_kind_kb,
     services_kb,
+    service_location_kb,
     submit_kb,
     unit_choice_kb,
     yes_no_kb,
 )
 from dobrolap_bot.bot.presentation import (
     format_draft_summary,
+    format_money,
     placement_reason_label,
     status_label,
     tariff_label,
+    service_option_label,
 )
 from dobrolap_bot.bot.states import BookingForm
 from dobrolap_bot.config.loader import Catalog
@@ -83,6 +86,23 @@ from dobrolap_bot.services.summary import format_client_status, format_owner_sum
 
 router = Router(name="client")
 logger = logging.getLogger(__name__)
+
+HOTEL_ADDRESS = 'СНТ «Заречное», 38, Люберецкий район'
+
+
+async def _send_price_photos(message: Message, assets_dir: Path, filenames: list[str]) -> None:
+    for filename in filenames:
+        path = assets_dir / "pricing" / filename
+        if not path.is_file():
+            logger.warning("Price photo missing: %s", path)
+            continue
+        try:
+            await message.answer_photo(
+                FSInputFile(path),
+                caption="Прайс для ознакомления. Актуальные условия и итоговую стоимость подтвердит руководитель.",
+            )
+        except Exception:
+            logger.exception("Could not send price photo: %s", path)
 
 # Telegram albums arrive as concurrent updates; buffer them so FSM doesn't drop photos.
 _passport_album_buffers: dict[str, list[str]] = {}
@@ -306,7 +326,10 @@ async def arrival_ask_text(callback: CallbackQuery) -> None:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await callback.message.answer("Напишите время заезда в формате ЧЧ:ММ, например: 19:30.")
+    await callback.message.answer(
+        "Напишите желаемое время, например: 18:00. Вне утреннего и вечернего окон "
+        "технический перерыв: возможность заезда и доплату согласует руководитель."
+    )
     await callback.answer()
 
 
@@ -445,7 +468,7 @@ async def set_service_date(message: Message, state: FSMContext) -> None:
         date_to=(visit_date + timedelta(days=1)).isoformat(),
     )
     await state.set_state(BookingForm.service_time)
-    await message.answer("Во сколько ожидать специалиста? Например: 14:00.")
+    await message.answer("На какое время планируете услугу? Например: 14:00 или 14 00.")
 
 
 @router.message(BookingForm.service_time)
@@ -455,8 +478,29 @@ async def set_service_time(message: Message, state: FSMContext) -> None:
         await message.answer("Не разобрал время. Формат ЧЧ:ММ, например 14:00.")
         return
     await state.update_data(arrival_time=visit_time.strftime("%H:%M"))
+    await state.set_state(BookingForm.service_location)
+    await message.answer("Где нужна услуга?", reply_markup=service_location_kb())
+
+
+@router.message(BookingForm.service_location)
+async def set_service_location(message: Message, state: FSMContext, assets_dir: Path) -> None:
+    text = (message.text or "").strip().lower()
+    if text == "в зоогостиницу на груминг":
+        await state.update_data(service_location="hotel", service_address=HOTEL_ADDRESS)
+        await _send_price_photos(message, assets_dir, ["04-price-list-services.jpg"])
+        await state.set_state(BookingForm.pet_kind)
+        await message.answer(
+            f"Ждём вас в зоогостинице: {HOTEL_ADDRESS}.\nКто ваш питомец?",
+            reply_markup=pet_kind_kb(),
+        )
+        return
+    if text != "выезд на дом (зооняня)":
+        await message.answer("Выберите место услуги кнопкой.", reply_markup=service_location_kb())
+        return
+    await state.update_data(service_location="home", service_address=None)
     await state.set_state(BookingForm.service_address)
-    await message.answer("По какому адресу нужна услуга?")
+    await _send_price_photos(message, assets_dir, ["04-price-list-services.jpg"])
+    await message.answer("По какому адресу ожидать специалиста?", reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(BookingForm.service_address)
@@ -585,7 +629,10 @@ async def set_pet_kind(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(draft_kind=kind.value)
     await state.set_state(BookingForm.pet_name)
-    if kind in {PetKind.BIRD, PetKind.RABBIT, PetKind.RAT, PetKind.HAMSTER, PetKind.GUINEA_PIG}:
+    data = await state.get_data()
+    if data.get("service_only"):
+        note = ""
+    elif kind in {PetKind.BIRD, PetKind.RABBIT, PetKind.RAT, PetKind.HAMSTER, PetKind.GUINEA_PIG}:
         note = " Для птиц и грызунов обязательно нужна собственная клетка."
     elif kind == PetKind.DOG:
         note = (
@@ -1027,7 +1074,7 @@ async def add_another(
             )
             await _ask_services(message, state, catalog)
             return
-        await _ask_tariff_choice(message, state, catalog)
+        await _ask_tariff_choice(message, state, catalog, assets_dir)
         return
     await message.answer("Выберите кнопку.", reply_markup=add_pet_kb())
 
@@ -1037,8 +1084,67 @@ def _tariff_choice_labels(catalog: Catalog) -> list[str]:
     return [tariff_label(t) for t in tariffs]
 
 
-async def _ask_tariff_choice(message: Message, state: FSMContext, catalog: Catalog) -> None:
+async def _ask_tariff_choice(
+    message: Message, state: FSMContext, catalog: Catalog, assets_dir: Path
+) -> None:
     labels = _tariff_choice_labels(catalog)
+    data = await state.get_data()
+    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    if len(pets) > 1:
+        await message.answer(
+            "Если питомцы живут вместе в одном помещении — скидка 50% на второго и каждого "
+            "следующего. При раздельном размещении — 30%. Итог зависит от выбранного тарифа."
+        )
+    kinds = {pet.kind for pet in pets}
+    price_files = []
+    if PetKind.DOG in kinds:
+        price_files.append("03-price-list-dogs.jpg")
+    if kinds - {PetKind.DOG}:
+        price_files.append("05-price-list-cats-other.jpg")
+    await _send_price_photos(message, assets_dir, price_files)
+    await message.answer(
+        "Ниже — фото вариантов размещения из каталога. Это знакомство с помещениями; "
+        "свободные и подходящие варианты на ваши даты проверю после выбора тарифа.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    shown = set()
+    for unit in catalog.active_accommodations():
+        if unit.tariff_kind in shown or not kinds.issubset(set(unit.allowed_species)):
+            continue
+        paths = unit.photos_for(pets)
+        # A category preview may use a verified room photo, without claiming it is free.
+        if not paths:
+            paths = [path for group in unit.photo_paths_by_sheet_label.values() for path in group]
+        for path_str in paths:
+            path = resolve_photo_path(path_str, assets_dir)
+            if not path:
+                continue
+            try:
+                caption = f"{tariff_label(unit.tariff_kind)} — пример: {unit.name}"
+                if data.get("date_from") and data.get("date_to"):
+                    preview_quote = PricingService(catalog).quote(
+                        pets=pets,
+                        unit=unit,
+                        date_from=date.fromisoformat(data["date_from"]),
+                        date_to=date.fromisoformat(data["date_to"]),
+                        feeding=FeedingOption.OWNER_FOOD,
+                    )
+                    if preview_quote.has_accommodation_amount:
+                        caption += (
+                            f"\nПо текущему тарифу: предварительно {format_money(preview_quote.total_rub)} "
+                            "за весь выбранный срок"
+                            + (" за всех питомцев вместе" if len(pets) > 1 else "")
+                            + ". Без питания, услуг и доплаты за заезд. Итог подтвердит руководитель."
+                        )
+                    else:
+                        caption += "\nСтоимость для вашего питомца уточнит руководитель."
+                await message.answer_photo(
+                    FSInputFile(path), caption=caption
+                )
+                shown.add(unit.tariff_kind)
+                break
+            except Exception:
+                logger.exception("Could not send tariff preview: %s", path)
     await state.set_state(BookingForm.tariff_choice)
     await message.answer(
         "Какой тариф размещения вас интересует? Если не уверены — выберите «Любой "
@@ -1313,7 +1419,7 @@ async def _ask_services(message: Message, state: FSMContext, catalog: Catalog) -
     data = await state.get_data()
     pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
     available = _available_services(catalog, pets)
-    items = [(s.id, s.name, False) for s in available]
+    items = [(s.id, service_option_label(s), False) for s in available]
     if not items:
         await state.set_state(BookingForm.promo)
         await message.answer(
@@ -1323,7 +1429,8 @@ async def _ask_services(message: Message, state: FSMContext, catalog: Catalog) -
         )
         return
     await message.answer(
-        "Дополнительные услуги (можно несколько). Стоимость каждой услуги оператор сообщит отдельно. "
+        "Выберите услуги (можно несколько). На кнопках — ориентировочная стоимость; "
+        "точную цену подтвердит руководитель. "
         "Если выберете зоотакси, попрошу адрес для расчёта поездки. Нажмите «Готово», когда закончите.",
         reply_markup=services_kb(items),
     )
@@ -1378,7 +1485,7 @@ async def toggle_service(callback: CallbackQuery, state: FSMContext, catalog: Ca
     else:
         selected.add(action)
     await state.update_data(service_ids=sorted(selected))
-    items = [(s.id, s.name, s.id in selected) for s in available]
+    items = [(s.id, service_option_label(s), s.id in selected) for s in available]
     await callback.message.edit_reply_markup(reply_markup=services_kb(items))
     await callback.answer()
 
@@ -1543,6 +1650,7 @@ async def submit_yes(
                 key: value for key, value in {
                     "taxi_address": data.get("taxi_address"),
                     "natural_food_source": data.get("natural_food_source"),
+                    "service_location": data.get("service_location"),
                 }.items() if value
             },
             review_discount_claim=bool(data.get("review_discount_claim")),

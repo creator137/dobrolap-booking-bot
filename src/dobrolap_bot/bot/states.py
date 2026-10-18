@@ -7,6 +7,7 @@ class BookingForm(StatesGroup):
     booking_kind = State()
     service_date = State()
     service_time = State()
+    service_location = State()
     service_address = State()
     dates = State()
     arrival_time = State()

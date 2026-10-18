@@ -21,6 +21,8 @@ def test_parse_arrival_time():
     assert parse_time("19:30").strftime("%H:%M") == "19:30"
     assert parse_time("8").strftime("%H:%M") == "08:00"
     assert parse_time("21.00").strftime("%H:%M") == "21:00"
+    assert parse_time("18 00").strftime("%H:%M") == "18:00"
+    assert parse_time(" 8   30 ").strftime("%H:%M") == "08:30"
     assert parse_time("24:00") is None
     assert parse_time("вечером") is None
 

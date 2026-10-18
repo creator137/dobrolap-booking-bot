@@ -70,7 +70,7 @@ def parse_single_date(text: str) -> date | None:
 
 
 def parse_time(text: str) -> time | None:
-    value = text.strip().replace(".", ":")
+    value = re.sub(r"\s+", ":", text.strip()).replace(".", ":")
     if re.fullmatch(r"\d{1,2}", value):
         value += ":00"
     if not re.fullmatch(r"\d{1,2}:\d{2}", value):
