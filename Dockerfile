@@ -7,7 +7,7 @@ COPY src ./src
 COPY config ./config
 COPY assets ./assets
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[sheets]"
 
 ENV PYTHONUNBUFFERED=1
 ENV DATABASE_PATH=/data/app.db

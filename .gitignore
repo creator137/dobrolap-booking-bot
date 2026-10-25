@@ -29,3 +29,4 @@ secrets/
 **/service-account*.json
 **/*service-account*.json
 **/*credentials*.json
+.DS_Store
