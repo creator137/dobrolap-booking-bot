@@ -10,10 +10,10 @@ COPY assets ./assets
 RUN pip install --no-cache-dir ".[sheets]"
 
 ENV PYTHONUNBUFFERED=1
-ENV DATABASE_PATH=/data/app.db
+ENV DATABASE_PATH=/app/data/app.db
 ENV CONFIG_DIR=/app/config
 ENV ASSETS_DIR=/app/assets
 
-VOLUME ["/data"]
+VOLUME ["/app/data"]
 
 CMD ["python", "-m", "dobrolap_bot"]
