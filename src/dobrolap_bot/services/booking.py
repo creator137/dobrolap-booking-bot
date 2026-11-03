@@ -125,6 +125,36 @@ class BookingService:
             return [unit_id]
         return acc.calendar_labels()
 
+    def _reserve_calendar(self, *, booking: BookingRecord, **kwargs) -> None:
+        assignments = booking.payload.get("room_assignments") or []
+        labels = [item["sheet_label"] for item in assignments] or [kwargs["unit_id"]]
+        completed: list[str] = []
+        try:
+            for label in labels:
+                self.sheets.reserve_booking(**{**kwargs, "unit_id": label})
+                completed.append(label)
+        except Exception:
+            for label in completed:
+                if booking.status == BookingStatus.WAITING_PAYMENT:
+                    self.sheets.reserve_booking(**{**kwargs, "unit_id": label, "status": booking.status.value})
+                else:
+                    self.sheets.release_booking(booking_id=booking.id, unit_id=label)
+            raise
+
+    def _release_calendar(self, *, booking: BookingRecord, **kwargs) -> None:
+        assignments = booking.payload.get("room_assignments") or []
+        labels = [item["sheet_label"] for item in assignments] or [kwargs.get("unit_id")]
+        completed: list[str] = []
+        try:
+            for label in labels:
+                self.sheets.release_booking(**{**kwargs, "unit_id": label})
+                completed.append(label)
+        except Exception:
+            for label in completed:
+                if label:
+                    self.sheets.reserve_booking(booking_id=booking.id, unit_id=label, date_from=booking.date_from, date_to=booking.date_to, status=booking.status.value, note=calendar_note_for_booking(booking))
+            raise
+
     def sheet_label(self, unit_id: str) -> str:
         """Primary calendar label (first pool slot)."""
         labels = self.sheet_labels(unit_id)
@@ -244,6 +274,7 @@ class BookingService:
         placement_together: bool = True,
         service_only: bool = False,
         service_address: str | None = None,
+        room_assignments: list[dict] | None = None,
     ) -> tuple[BookingRecord, PriceQuote | None]:
         customer_id = await self.repo.upsert_customer(
             telegram_user_id=telegram_user_id,
@@ -262,7 +293,22 @@ class BookingService:
                 raise ValueError("promo_not_first_placement")
 
         quote: PriceQuote | None = None
+        if not unit_id:
+            room_assignments = None
         unit = self.catalog.get_accommodation(unit_id) if unit_id else None
+        if room_assignments and unit_id:
+            occupied = self.fetch_occupied_labels(date_from, date_to)
+            seen: set[str] = set()
+            indices = [index for item in room_assignments for index in item["pet_indices"]]
+            if sorted(indices) != list(range(len(pets))):
+                raise ValueError("incomplete_room_assignments")
+            for item in room_assignments:
+                label = self.free_sheet_label_from_labels(item["unit_id"], occupied | seen, preferred_label=item["sheet_label"])
+                seen.add(label.lower())
+                group = [pets[index] for index in item["pet_indices"]]
+                matches = self.placement.suggest(group, for_owner=True, limit=100).candidates
+                if not any(candidate.accommodation.id == item["unit_id"] for candidate in matches):
+                    raise ValueError("incompatible_room_assignment")
         if unit is not None and unit_id is not None:
             try:
                 self.resolve_free_sheet_label(
@@ -285,6 +331,7 @@ class BookingService:
                 promo_at=promo_at,
                 arrival_time=arrival_time,
                 together=placement_together,
+                room_assignments=room_assignments,
             )
             if review_discount_claim:
                 quote.provisional = True
@@ -294,6 +341,7 @@ class BookingService:
         booking_id = uuid.uuid4().hex[:12]
         payload: dict[str, Any] = {
             "pets": [p.model_dump(mode="json") for p in pets],
+            "room_assignments": room_assignments or [],
             "feeding": feeding.value if feeding else None,
             "service_ids": service_ids,
             "service_details": service_details or {},
@@ -422,7 +470,7 @@ class BookingService:
                     exclude_booking_id=booking.id,
                     preferred_label=booking.payload.get("requested_sheet_label"),
                 )
-                self.sheets.reserve_booking(
+                self._reserve_calendar(booking=booking,
                     booking_id=booking.id,
                     unit_id=sheet_label,
                     date_from=booking.date_from,
@@ -455,11 +503,11 @@ class BookingService:
             )
             if not ok:
                 if sheet_label:
-                    self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
+                    self._release_calendar(booking=booking, booking_id=booking.id, unit_id=sheet_label)
                 raise InvalidTransitionError("concurrent status change on approve")
         except Exception:
             if sheet_label:
-                self.sheets.release_booking(booking_id=booking.id, unit_id=sheet_label)
+                self._release_calendar(booking=booking, booking_id=booking.id, unit_id=sheet_label)
             raise
         return booking
 
@@ -478,7 +526,7 @@ class BookingService:
                 actor="owner",
             )
             held = booking.payload.get("sheet_label")
-            self.sheets.release_booking(
+            self._release_calendar(booking=booking,
                 booking_id=booking.id,
                 unit_id=held or (self.sheet_label(booking.unit_id) if booking.unit_id else None),
             )
@@ -512,7 +560,7 @@ class BookingService:
         transition(booking.status, BookingStatus.CANCELLED)
         held = booking.payload.get("sheet_label")
         if held:
-            self.sheets.release_booking(booking_id=booking.id, unit_id=held)
+            self._release_calendar(booking=booking, booking_id=booking.id, unit_id=held)
         extra: dict[str, Any] = {"cancel_reason": reason}
         if refund_pending or original_status == BookingStatus.CONFIRMED:
             extra["refund"] = {
@@ -532,7 +580,7 @@ class BookingService:
             )
         except Exception:
             if held:
-                self.sheets.reserve_booking(
+                self._reserve_calendar(booking=booking,
                     booking_id=booking.id,
                     unit_id=held,
                     date_from=booking.date_from,
@@ -580,7 +628,7 @@ class BookingService:
                 return None
             held = booking.payload.get("sheet_label")
             if held:
-                self.sheets.release_booking(booking_id=booking.id, unit_id=held)
+                self._release_calendar(booking=booking, booking_id=booking.id, unit_id=held)
             try:
                 return await self._set_status(
                     booking,
@@ -592,7 +640,7 @@ class BookingService:
                 )
             except Exception:
                 if held:
-                    self.sheets.reserve_booking(
+                    self._reserve_calendar(booking=booking,
                         booking_id=booking.id,
                         unit_id=held,
                         date_from=booking.date_from,
@@ -644,6 +692,8 @@ class BookingService:
         unit = self.catalog.get_accommodation(unit_id)
         if unit is None:
             raise ValueError("unknown_unit")
+        if len(booking.payload.get("room_assignments") or []) > 1:
+            raise ValueError("multiple_rooms_require_individual_matching")
         occupied = self.occupied_catalog_ids(
             booking.date_from,
             booking.date_to,
@@ -672,7 +722,7 @@ class BookingService:
         )
         held = booking.payload.get("sheet_label")
         if held:
-            self.sheets.release_booking(booking_id=booking.id, unit_id=held)
+            self._release_calendar(booking=booking, booking_id=booking.id, unit_id=held)
         booking.status = target
         booking.unit_id = unit_id
         booking.price_total = (
@@ -688,6 +738,7 @@ class BookingService:
             "manual_matching": False,
             "sheet_label": None,
             "requested_sheet_label": None,
+            "room_assignments": [],
             "receipt_file_ids": [],
         }
         booking.updated_at = _utcnow()
@@ -695,7 +746,7 @@ class BookingService:
             await self.repo.save_booking(booking)
         except Exception:
             if held:
-                self.sheets.reserve_booking(
+                self._reserve_calendar(booking=booking,
                     booking_id=booking.id,
                     unit_id=held,
                     date_from=booking.date_from,
@@ -736,7 +787,7 @@ class BookingService:
         receipts = list(booking.payload.get("receipt_file_ids") or [])
         manual = not receipts
         label = booking.payload["sheet_label"]
-        self.sheets.reserve_booking(
+        self._reserve_calendar(booking=booking,
             booking_id=booking.id,
             unit_id=label,
             date_from=booking.date_from,

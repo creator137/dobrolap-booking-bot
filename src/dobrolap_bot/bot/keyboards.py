@@ -94,9 +94,9 @@ def add_pet_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def placement_together_kb() -> ReplyKeyboardMarkup:
+def placement_together_kb(*, partial: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Вместе"), KeyboardButton(text="Раздельно")]],
+        keyboard=[[KeyboardButton(text="Вместе"), KeyboardButton(text="Раздельно")]] + ([[KeyboardButton(text="Частично")]] if partial else []),
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -134,7 +134,7 @@ def feeding_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Свой корм")],
-            [KeyboardButton(text="Рацион гостиницы")],
+            [KeyboardButton(text="Рацион гостиницы (платно, индивидуальный расчёт)")],
             [KeyboardButton(text="Натуральное — готовое, минимум нарезки (150 ₽/сутки)")],
             [KeyboardButton(text="Натуральное — приготовить кашу (250 ₽/сутки)")],
         ],

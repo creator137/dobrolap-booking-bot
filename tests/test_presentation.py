@@ -65,7 +65,7 @@ def _booking() -> BookingRecord:
 def test_all_public_labels_are_russian():
     assert status_label(BookingStatus.WAITING_OWNER) == "Ожидает решения руководителя зоогостиницы"
     assert pet_kind_label(PetKind.DOG) == "Собака"
-    assert feeding_label(FeedingOption.HOTEL_RATION) == "Рацион зоогостиницы"
+    assert feeding_label(FeedingOption.HOTEL_RATION) == "Рацион зоогостиницы (платно, индивидуальный расчёт)"
     assert "Google Sheets" in placement_flag_label("sheets_unavailable")
     assert "нет столбцов" in placement_flag_label("calendar_dates_missing")
 

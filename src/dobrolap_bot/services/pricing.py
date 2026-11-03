@@ -35,6 +35,7 @@ class PricingService:
         promo_at: date | None = None,
         arrival_time: str | None = None,
         together: bool = True,
+        room_assignments: list[dict] | None = None,
     ) -> PriceQuote:
         if date_to <= date_from:
             raise ValueError("date_to must be after date_from")
@@ -57,7 +58,25 @@ class PricingService:
             )
 
         shared_pet_discount = 0
+        pet_units = {index: unit for index in range(len(pets))}
+        pet_discount_rates = {index: (multi_pet_discount_rate if index else 0) for index in range(len(pets))}
+        if room_assignments:
+            if len(room_assignments) > 1 and any(len(item["pet_indices"]) > 1 for item in room_assignments):
+                notes = [note for note in notes if "размещение: скидка" not in note]
+                notes.append("Частичное размещение: 50% на дополнительных питомцев в общей комнате, 30% на первого питомца в каждой следующей отдельной комнате.")
+            indices = [index for item in room_assignments for index in item["pet_indices"]]
+            if sorted(indices) != list(range(len(pets))):
+                raise ValueError("incomplete_room_assignments")
+            for group_index, item in enumerate(room_assignments):
+                assigned_unit = self.catalog.get_accommodation(item["unit_id"])
+                if assigned_unit is None:
+                    raise ValueError("unknown_unit")
+                for position, index in enumerate(item["pet_indices"]):
+                    pet_units[index] = assigned_unit
+                    pet_discount_rates[index] = 0.5 if position else (0.3 if group_index else 0)
+        tariff_subtotals: dict[str, int] = {}
         for pet_index, pet in enumerate(pets):
+            unit = pet_units[pet_index]
             if unit.tariff_unconfirmed:
                 provisional = True
                 lines.append(
@@ -92,6 +111,9 @@ class PricingService:
                 provisional = True
                 detail = (detail or "") + "; обычный VIP без отдельной тарифной колонки в XLSX"
             amount = day_price * nights
+            discount_rate = pet_discount_rates[pet_index]
+            discount_pct = int(discount_rate * 100)
+            tariff_subtotals[unit.tariff_kind] = tariff_subtotals.get(unit.tariff_kind, 0) + amount - int(amount * discount_rate)
             provisional = provisional or day_provisional
             lines.append(
                 QuoteLine(
@@ -103,12 +125,12 @@ class PricingService:
                 )
             )
             if pet_index > 0:
-                discount = int(amount * multi_pet_discount_rate)
+                discount = int(amount * discount_rate)
                 shared_pet_discount -= discount
                 lines.append(
                     QuoteLine(
                         scope=PriceScope.DISCOUNT,
-                        label=f"Скидка {multi_pet_discount_pct}% на размещение питомца: {pet.name}",
+                        label=f"Скидка {discount_pct}% на размещение питомца: {pet.name}",
                         amount_rub=-discount,
                         detail="Скидка на второго и каждого следующего питомца; лимит акции за отзывы к ней не относится",
                     )
@@ -133,7 +155,7 @@ class PricingService:
                     scope=PriceScope.FEEDING,
                     label="Готовый рацион гостиницы",
                     amount_rub=0,
-                    detail="Цена рациона не задана в материалах",
+                    detail="Платный рацион; стоимость рассчитывается индивидуально и добавляется к проживанию",
                     provisional=True,
                 )
             )
@@ -184,7 +206,8 @@ class PricingService:
             arrival_label = "Заезд 08:00–11:00 (полная стоимость суток)"
         if arrival_fraction:
             half_day_total = 0
-            for pet in pets:
+            for pet_index, pet in enumerate(pets):
+                unit = pet_units[pet_index]
                 arrival_rate = self._find_rate(pet, unit.rate_tariff_kind or unit.tariff_kind)
                 if arrival_rate is None or arrival_rate.unavailable:
                     provisional = True
@@ -201,15 +224,17 @@ class PricingService:
                 ))
 
         # Promo / discounts (active rules only)
-        discount_lines = self._apply_discounts(
-            accommodation_subtotal=accommodation_subtotal,
-            on_date=promo_at or self.promo_today(),
-            promo_code=promo_code,
-            promo_eligible=promo_eligible,
-            nights=nights,
-            tariff_kind=unit.tariff_kind,
-            max_actions=1 if len(pets) > 1 else 2,
-        )
+        discount_lines = []
+        for tariff, subtotal in tariff_subtotals.items():
+            discount_lines.extend(self._apply_discounts(
+                accommodation_subtotal=subtotal,
+                on_date=promo_at or self.promo_today(),
+                promo_code=promo_code,
+                promo_eligible=promo_eligible,
+                nights=nights,
+                tariff_kind=tariff,
+                max_actions=1 if len(pets) > 1 else 2,
+            ))
         lines.extend(discount_lines)
         if len(pets) > 1 and promo_eligible and nights >= 30:
             provisional = True
@@ -317,7 +342,7 @@ class PricingService:
         lines: list[QuoteLine] = []
         rules = sorted(
             [r for r in self.catalog.price_rules if r.active and r.scope == PriceScope.DISCOUNT],
-            key=lambda r: r.priority,
+            key=lambda r: (0 if max_actions == 1 and r.condition.get("min_nights") else 1, r.priority),
         )
         applied_non_stackable = False
         promo_rule = (

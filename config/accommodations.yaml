@@ -9,17 +9,32 @@ accommodations:
     sheet_unit_id: "Домик педбанник"
     sheet_unit_ids:
       - "Домик педбанник"
-      - "Домик 2 этаж"
     tariff_kind: vip_plus
-    allowed_species: [dog, cat, rabbit, rat, hamster, bird, guinea_pig]
+    allowed_species: [dog]
     features: [indoor, private, vip]
     priority_tags: [vip, unvaccinated_cats, stressed_cats]
     photo_paths_by_sheet_label:
       "Домик педбанник":
         - assets/rooms/20-house-prebathroom.png
-      "Домик 2 этаж":
-        - assets/rooms/16-house-reserve-vip-plus.jpg
     notes: "Резервная VIP+ в домике (педбанник / 2 этаж)"
+
+  - id: house_second_floor
+    name: "Домик 2 этаж (резервная VIP+)"
+    sheet_unit_id: "Домик 2 этаж"
+    tariff_kind: vip_plus
+    allowed_species: [dog, cat]
+    features: [indoor, private, vip, house]
+    photo_paths:
+      - assets/rooms/16-house-reserve-vip-plus.jpg
+
+  - id: small_animals_balcony
+    name: "Тихая комната для грызунов (в собственной клетке)"
+    sheet_unit_id: "2 этаж балкон"
+    tariff_kind: vip_plus
+    allowed_species: [rabbit, rat, hamster, guinea_pig, bird]
+    features: [indoor, cage, balcony]
+    photo_paths:
+      - assets/rooms/05-balcony.jpg
 
   - id: seasonal_vip_under_stairs
     name: "Домик под лестницей (VIP)"
@@ -27,7 +42,7 @@ accommodations:
     tariff_kind: vip
     rate_tariff_kind: vip_plus
     rate_adjustment_rub: -250
-    allowed_species: [dog, cat]
+    allowed_species: [dog]
     features: [indoor, pass-through, private, vip]
     priority_tags: [vip]
     photo_paths:
@@ -178,7 +193,7 @@ accommodations:
     tariff_kind: vip
     rate_tariff_kind: vip_plus
     rate_adjustment_rub: -250
-    allowed_species: [dog, cat]
+    allowed_species: [dog]
     features: [indoor, house, private]
     priority_tags: [loud_barking, separate_house, vip]
     photo_paths:

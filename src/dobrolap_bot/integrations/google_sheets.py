@@ -74,7 +74,7 @@ class InMemorySheetsGateway:
     """Test double only — never used when GOOGLE_SHEETS_ENABLED=true in production factory."""
 
     def __init__(self, rows: list[SheetBooking] | None = None) -> None:
-        self._rows: dict[str, SheetBooking] = {r.external_id: r for r in (rows or [])}
+        self._rows: dict[tuple[str, str], SheetBooking] = {(r.external_id, r.unit_id): r for r in (rows or [])}
 
     def list_bookings(self) -> list[SheetBooking]:
         return list(self._rows.values())
@@ -111,19 +111,14 @@ class InMemorySheetsGateway:
         )
         if unit_id in occupied:
             raise ValueError("unit_occupied")
-        return self.upsert_booking(
-            booking_id=booking_id,
-            unit_id=unit_id,
-            date_from=date_from,
-            date_to=date_to,
-            status=status,
-            note=note,
-        )
+        row = SheetBooking(booking_id, unit_id, date_from, date_to, status)
+        self._rows[(booking_id, unit_id)] = row
+        return row
 
     def release_booking(self, *, booking_id: str, unit_id: str | None = None) -> None:
-        row = self._rows.pop(booking_id, None)
-        if row is None and unit_id:
-            return
+        for key, row in list(self._rows.items()):
+            if row.external_id == booking_id and (not unit_id or row.unit_id == unit_id):
+                del self._rows[key]
 
     def upsert_booking(
         self,
@@ -141,7 +136,8 @@ class InMemorySheetsGateway:
             row = SheetBooking(booking_id, unit_id, date_from, date_to, status)
             return row
         row = SheetBooking(booking_id, unit_id, date_from, date_to, status)
-        self._rows[booking_id] = row
+        self.release_booking(booking_id=booking_id)
+        self._rows[(booking_id, unit_id)] = row
         return row
 
 

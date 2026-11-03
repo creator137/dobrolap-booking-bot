@@ -92,6 +92,8 @@ class PlacementService:
         merged: list[PlacementCandidate] = []
         for unit_id in common_ids:
             base = by_id[unit_id]
+            if not self.group_allowed(pets, base.accommodation):
+                continue
             if requires_manual or for_owner:
                 base = base.model_copy(update={"requires_owner_review": True})
             merged.append(base)
@@ -155,6 +157,16 @@ class PlacementService:
     def _evaluate(self, pet: PetProfile, unit: Accommodation) -> PlacementCandidate | None:
         if pet.kind not in unit.allowed_species:
             return None
+        if pet.in_heat and "private" not in unit.features:
+            return None
+        if unit.id == "house_second_floor" and pet.kind == PetKind.DOG:
+            if pet.weight_kg is None or pet.weight_kg > 10:
+                return None
+        if unit.tariff_kind == "premium" and (pet.weight_kg is None or pet.weight_kg <= 10):
+            return None
+        if unit.tariff_kind in {"standard_m", "standard_l"}:
+            if pet.kind == PetKind.DOG and (pet.weight_kg is None or pet.weight_kg > 10):
+                return None
 
         if unit.weight_min_kg is not None and pet.weight_kg is not None:
             if pet.weight_kg < unit.weight_min_kg:
@@ -168,7 +180,7 @@ class PlacementService:
         if pet.kind == PetKind.DOG and not self._dog_allowed(pet, unit):
             return None
 
-        if not self._tariff_offered(pet, unit.tariff_kind):
+        if not self._tariff_offered(pet, unit.rate_tariff_kind or unit.tariff_kind):
             return None
 
         warnings: list[str] = []
@@ -193,6 +205,28 @@ class PlacementService:
             warnings=warnings,
             requires_owner_review=requires_review,
         )
+
+    @staticmethod
+    def group_allowed(pets: list[PetProfile], unit: Accommodation) -> bool:
+        count = len(pets)
+        if count > 1 and (any(p.in_heat for p in pets) or len({p.kind for p in pets}) > 1):
+            return False
+        tariff = unit.tariff_kind
+        if tariff in {"optimal_s", "economy"}:
+            return count <= 1
+        if tariff in {"standard_m", "standard_l"}:
+            return count <= 3 and all((p.kind == PetKind.CAT and p.weight_kg is None) or (p.weight_kg is not None and p.weight_kg <= 10) for p in pets)
+        if tariff in {"comfort", "comfort_plus"}:
+            if all(p.kind == PetKind.CAT for p in pets):
+                return count <= (4 if tariff == "comfort" else 6)
+            if all(p.kind == PetKind.DOG for p in pets):
+                if any(p.weight_kg is None for p in pets):
+                    return False
+                weights = [p.weight_kg for p in pets]
+                if tariff == "comfort":
+                    return count <= 2 and max(weights) <= 20
+                return (count <= 2 and max(weights) <= 25) or (count <= 3 and max(weights) <= 15)
+        return True
 
     def _dog_needs_manual(self, pet: PetProfile) -> bool:
         b = pet.behavior
@@ -286,6 +320,8 @@ class PlacementService:
 
     def _score(self, pet: PetProfile, unit: Accommodation) -> tuple[int, list[str]]:
         score = 0
+        if unit.id in {"vip_plus_house_reserve", "house_second_floor", "house_kitchen", "seasonal_vip_under_stairs"}:
+            score -= 100
         reasons: list[str] = []
         tags = set(unit.priority_tags)
         b = pet.behavior

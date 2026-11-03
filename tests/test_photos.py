@@ -60,7 +60,7 @@ def one_unit_catalog(unit_id):
     ("kind", "weight", "expected", "excluded"),
     [
         (PetKind.CAT, None, "24-standard-m-cat.png", "25-standard-m-dog.png"),
-        (PetKind.DOG, 12, "25-standard-m-dog.png", "24-standard-m-cat.png"),
+        (PetKind.DOG, 10, "25-standard-m-dog.png", "24-standard-m-cat.png"),
     ],
 )
 async def test_client_gets_species_photo_for_suitable_standard_m(kind, weight, expected, excluded):
@@ -97,7 +97,7 @@ async def test_outdoor_photo_only_when_exact_enclosure_two_is_free():
 @pytest.mark.asyncio
 async def test_house_photo_only_for_prebathroom_not_other_house_room():
     catalog = one_unit_catalog("vip_plus_house_reserve")
-    pet = PetProfile(kind=PetKind.CAT, name="Кот", vaccinated=True, parasite_treated=True)
+    pet = PetProfile(kind=PetKind.DOG, name="Пёс", weight_kg=6, vaccinated=True, parasite_treated=True)
     for occupied_prebathroom in (False, True):
         rows = [SheetBooking("other", "Домик педбанник", date(2026, 11, 10), date(2026, 11, 12), "CONFIRMED")] if occupied_prebathroom else []
         sheets = InMemorySheetsGateway(rows)
@@ -106,7 +106,7 @@ async def test_house_photo_only_for_prebathroom_not_other_house_room():
         await _run_placement(message, state, catalog, sheets, service, ROOT / "assets")
         paths = [str(item.media.path) for group in message.media for item in group]
         assert any("20-house-prebathroom.png" in path for path in paths) is not occupied_prebathroom
-        assert any("16-house-reserve-vip-plus.jpg" in path for path in paths) is occupied_prebathroom
+        assert not any("16-house-reserve-vip-plus.jpg" in path for path in paths)
 
 
 @pytest.mark.asyncio
@@ -125,7 +125,7 @@ async def test_economy_cat_receives_both_provided_views():
 async def test_new_s_l_and_a_plus_a_photos_match_suitable_units():
     cases = [
         ("optimal_s", PetKind.DOG, 6, "26-optimal-s.png"),
-        ("standard_l", PetKind.DOG, 18, "27-standard-l-dog.png"),
+        ("standard_l", PetKind.DOG, 10, "27-standard-l-dog.png"),
         ("second_floor_a_plus_a", PetKind.CAT, None, "31-second-floor-a-plus-a.png"),
     ]
     for unit_id, kind, weight, expected in cases:

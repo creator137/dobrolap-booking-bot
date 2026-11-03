@@ -56,7 +56,7 @@ PET_KIND_LABELS = {
 
 FEEDING_LABELS = {
     FeedingOption.OWNER_FOOD: "Корм привозит хозяин питомца",
-    FeedingOption.HOTEL_RATION: "Рацион зоогостиницы",
+    FeedingOption.HOTEL_RATION: "Рацион зоогостиницы (платно, индивидуальный расчёт)",
     FeedingOption.NATURAL_COOKED: "Натуральное питание с приготовлением",
     FeedingOption.NATURAL_READY: "Натуральное питание: готовое, минимум нарезки (150 ₽/сутки)",
     FeedingOption.NATURAL_PORRIDGE: "Натуральное питание: приготовить кашу (250 ₽/сутки)",
@@ -213,6 +213,11 @@ def _pet_lines(pet: PetProfile, *, prefix: str = "") -> list[str]:
         details.append(f"порода: {pet.breed}")
     if pet.weight_kg is not None:
         details.append(f"вес: {pet.weight_kg:g} кг")
+    if pet.sex:
+        details.append(f"пол: {pet.sex}")
+        details.append(f"кастрирован/стерилизована: {yes_no_unknown(pet.neutered)}")
+        if pet.sex == "женский":
+            details.append(f"течка: {yes_no_unknown(pet.in_heat)}")
     if details:
         lines.append(f"{indent}  " + "; ".join(details))
     if pet.kind in {PetKind.DOG, PetKind.CAT}:
@@ -273,6 +278,22 @@ def _services_text(service_ids: list[str], catalog: Catalog) -> str:
     return ", ".join(names) if names else "Не выбраны"
 
 
+def placement_mode_label(data: dict) -> str:
+    assignments = data.get("room_assignments") or []
+    if len(assignments) > 1 and any(len(item["pet_indices"]) > 1 for item in assignments):
+        return "частично"
+    return "вместе" if data.get("placement_together", True) else "раздельно"
+
+
+def room_assignment_lines(data: dict, pets: list[PetProfile], catalog: Catalog) -> list[str]:
+    lines = []
+    for item in data.get("room_assignments") or []:
+        unit = catalog.get_accommodation(item["unit_id"])
+        names = ", ".join(pets[index].name for index in item["pet_indices"])
+        lines.append(f"{names} → {unit.name if unit else item['unit_id']} ({item['sheet_label']})")
+    return lines
+
+
 def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
     pets = [PetProfile.model_validate(p) for p in booking.payload.get("pets") or []]
     service_only = bool(booking.payload.get("service_only"))
@@ -307,8 +328,7 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
         for index, pet in enumerate(pets, 1):
             lines.extend(_pet_lines(pet, prefix=f"{index}. " if len(pets) > 1 else "• "))
         if len(pets) > 1 and not service_only:
-            together = booking.payload.get("placement_together", True)
-            lines.append("Размещение питомцев: " + ("вместе" if together else "раздельно"))
+            lines.append("Размещение питомцев: " + placement_mode_label(booking.payload))
     else:
         lines.append("Не указаны")
 
@@ -318,6 +338,7 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
         lines.append("Формат: разовая услуга без размещения")
     else:
         lines.append(f"Помещение: {unit.name if unit else 'Подбирается руководителем зоогостиницы'}")
+        lines.extend(room_assignment_lines(booking.payload, pets, catalog))
         lines.append(f"Питание: {feeding_label(booking.payload.get('feeding'))}")
     lines.extend(
         [
@@ -329,6 +350,11 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
         ]
     )
     taxi_address = (booking.payload.get("service_details") or {}).get("taxi_address")
+    for item in booking.payload.get("quote_lines") or []:
+        if item.get("scope") in {"accommodation", "discount"}:
+            lines.append(f"{item['label']}: {format_money(item['amount_rub'])}")
+    if booking.payload.get("quote_explanation"):
+        lines.append(booking.payload["quote_explanation"])
     if taxi_address:
         lines.append(f"Адрес для зоотакси: {taxi_address}")
     food_source = (booking.payload.get("service_details") or {}).get("natural_food_source")
@@ -375,7 +401,7 @@ def format_client_status(booking: BookingRecord, catalog: Catalog) -> str:
     lines.append(
         f"Питомцы: {pet_names}"
         + (
-            f" ({'вместе' if booking.payload.get('placement_together', True) else 'раздельно'})"
+            f" ({placement_mode_label(booking.payload)})"
             if len(pets) > 1 and not service_only else ""
         )
     )
@@ -383,6 +409,7 @@ def format_client_status(booking: BookingRecord, catalog: Catalog) -> str:
         lines.append("Формат: разовая услуга без размещения")
     else:
         lines.append(f"Размещение: {unit.name if unit else 'подбирает руководитель зоогостиницы'}")
+        lines.extend(room_assignment_lines(booking.payload, pets, catalog))
         lines.append(f"Питание: {feeding_label(booking.payload.get('feeding'))}")
     lines.append(f"Услуги: {_services_text(list(booking.payload.get('service_ids') or []), catalog)}")
     lines.append(f"Предварительная стоимость: {format_money(booking.price_total)}")
@@ -419,13 +446,13 @@ def format_draft_summary(
     for index, pet in enumerate(pets, 1):
         lines.extend(_pet_lines(pet, prefix=f"{index}. " if len(pets) > 1 else "• "))
     if len(pets) > 1 and not service_only:
-        together = data.get("placement_together", True)
-        lines.append("Размещение питомцев: " + ("вместе" if together else "раздельно"))
+        lines.append("Размещение питомцев: " + placement_mode_label(data))
     lines.append("")
     if service_only:
         lines.append("Формат: разовая услуга без размещения")
     else:
         lines.append(f"Размещение: {unit.name if unit else 'подбирает руководитель зоогостиницы'}")
+        lines.extend(room_assignment_lines(data, pets, catalog))
         lines.append(f"Питание: {feeding_label(data.get('feeding'))}")
     lines.extend(
         [
@@ -440,7 +467,11 @@ def format_draft_summary(
         lines.append("Продукты для натурального питания: " + ("предоставляет хозяин питомца" if data["natural_food_source"] == "owner_provides" else "покупает гостиница, передаёт чеки"))
     if quote:
         if quote.has_accommodation_amount:
+            for line in quote.lines:
+                if line.scope.value in {"accommodation", "discount"}:
+                    lines.append(f"{line.label}: {format_money(line.amount_rub)}")
             lines.append(f"Предварительная стоимость: {format_money(quote.total_rub)}")
+            lines.append(quote.explanation)
         else:
             lines.append("Стоимость проживания сообщит оператор после уточнения условий.")
         lines.append(f"Залог: {format_money(quote.deposit_rub)}")

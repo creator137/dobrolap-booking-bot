@@ -38,6 +38,9 @@ class PetProfile(BaseModel):
     age_months: int | None = None
     breed: str | None = None
     weight_kg: float | None = None
+    sex: str | None = None
+    neutered: bool | None = None
+    in_heat: bool = False
     is_puppy_or_kitten: bool = False
     vaccinated: bool | None = None
     vaccinated_until: date | None = None

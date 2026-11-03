@@ -40,6 +40,7 @@ KIND_MAP = {
 FEED_MAP = {
     "свой корм": FeedingOption.OWNER_FOOD,
     "рацион гостиницы": FeedingOption.HOTEL_RATION,
+    "рацион гостиницы (платно, индивидуальный расчёт)": FeedingOption.HOTEL_RATION,
     "натуральное с приготовлением": FeedingOption.NATURAL_PORRIDGE,
     "натуральное — готовое, минимум нарезки (150 ₽/сутки)": FeedingOption.NATURAL_READY,
     "натуральное — приготовить кашу (250 ₽/сутки)": FeedingOption.NATURAL_PORRIDGE,
@@ -62,7 +63,7 @@ def parse_dates(text: str) -> tuple[date, date] | None:
 
 
 def parse_single_date(text: str) -> date | None:
-    text = text.strip()
+    text = text.strip().rstrip(".").strip()
     try:
         return datetime.strptime(text, "%d.%m.%Y").date()
     except ValueError:
