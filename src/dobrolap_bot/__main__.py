@@ -6,6 +6,7 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 
+from dobrolap_bot.bot.audit import FlowAuditMiddleware
 from dobrolap_bot.bot.handlers import router as client_router
 from dobrolap_bot.bot.owner import router as owner_router
 from dobrolap_bot.config.loader import load_catalog
@@ -49,6 +50,7 @@ async def run_bot() -> None:
 
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher(storage=fsm_storage)
+    dp.update.middleware(FlowAuditMiddleware())
     assets_dir = settings.assets_dir
     if not assets_dir.is_absolute():
         assets_dir = Path.cwd() / assets_dir

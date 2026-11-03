@@ -154,6 +154,7 @@ accommodations:
       "Уличный Вольер Комфорт для собак 2":
         - assets/rooms/23-outdoor-enclosure-2.png
         - assets/rooms/18-unknown-1.jpg
+        - assets/rooms/29-outdoor-interior.png
 
   - id: home_shared
     name: "Домашнее размещение"

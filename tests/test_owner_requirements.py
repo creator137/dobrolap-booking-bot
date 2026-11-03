@@ -84,7 +84,8 @@ def test_services_for_boarding_and_visits(catalog):
     pets = [dog(), PetProfile(kind=PetKind.CAT, name="Кошка")]
     excluded = {"walk", "dogsitter", "cat_nanny"}
     assert not excluded & {service.id for service in _available_services(catalog, pets)}
-    assert "walk" in {service.id for service in _available_services(catalog, pets, service_only=True)}
+    assert "walk" not in {service.id for service in _available_services(catalog, pets, service_only=True)}
+    assert "walk" in {service.id for service in _available_services(catalog, [dog()], service_only=True)}
 
 
 @pytest.mark.parametrize("text,expected", [("01.11.2026.", date(2026, 11, 1)), ("31.11.2026", None), ("29.02.2028.", date(2028, 2, 29)), ("29.02.2026", None)])

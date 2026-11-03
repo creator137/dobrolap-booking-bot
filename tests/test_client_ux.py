@@ -46,24 +46,23 @@ def message(text):
 @pytest.mark.parametrize("at_home", [True, False])
 async def test_service_location_routes_to_address_only_for_home(at_home):
     state = State(service_only=True)
-    msg = message("18 00")
-    await set_service_time(msg, state)
-    assert state.data["arrival_time"] == "18:00"
-    assert state.current == BookingForm.service_location
-    keyboard = msg.answer.call_args.kwargs["reply_markup"]
-    labels = [button.text for row in keyboard.keyboard for button in row]
-    assert labels == ["Выезд на дом (зооняня)", "В зоогостиницу на груминг"]
-
-    msg.text = labels[0 if at_home else 1]
-    await set_service_location(msg, state, ROOT / "assets")
-    assert msg.answer_photo.await_count == 1
+    catalog = load_catalog(ROOT / "config")
+    msg = message("Выезд на дом (зооняня)" if at_home else "В зоогостиницу на груминг")
+    await set_service_location(msg, state, ROOT / "assets", catalog)
     if at_home:
         assert state.current == BookingForm.service_address
         msg.text = "Адрес клиента, дом 12"
-        await set_service_address(msg, state)
+        await set_service_address(msg, state, catalog)
         assert state.data["service_address"] == msg.text
     else:
         assert state.data["service_address"] == HOTEL_ADDRESS
+    assert state.current == BookingForm.service_date
+    from dobrolap_bot.bot.handlers import set_service_date
+    msg.text = "20.11.2027"
+    await set_service_date(msg, state)
+    msg.text = "18 00"
+    await set_service_time(msg, state)
+    assert state.data["arrival_time"] == "18:00"
     assert state.current == BookingForm.pet_kind
     msg.text = "Кошка"
     await set_pet_kind(msg, state)
@@ -74,7 +73,7 @@ async def test_service_location_routes_to_address_only_for_home(at_home):
 @pytest.mark.asyncio
 async def test_invalid_location_does_not_advance():
     state = State(service_only=True)
-    await set_service_location(message("случайный адрес"), state, ROOT / "assets")
+    await set_service_location(message("случайный адрес"), state, ROOT / "assets", load_catalog(ROOT / "config"))
     assert "service_location" not in state.data
     assert state.current is None
 

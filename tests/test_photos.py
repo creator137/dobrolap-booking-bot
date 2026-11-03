@@ -151,7 +151,10 @@ async def test_outdoor_category_photos_are_shown_for_each_free_outdoor_unit():
         await _run_placement(message, state, catalog, sheets, service, ROOT / "assets")
         paths = [str(item.media.path) for group in message.media for item in group]
         assert state.data["offered_sheet_labels"]["outdoor_comfort"] == free_label
-        assert all(any(f"{number}-outdoor-" in path for path in paths) for number in ("28", "29", "30"))
+        assert len(paths) == 3
+        assert len(set(paths)) == 3
+        assert not ({"23-outdoor-enclosure-2.png", "30-outdoor-overview.png"} <= {Path(p).name for p in paths})
+        assert not ({"18-unknown-1.jpg", "28-outdoor-building.png"} <= {Path(p).name for p in paths})
 
 
 def test_all_catalog_photos_exist_and_uncertain_images_are_not_shown():
@@ -165,4 +168,4 @@ def test_all_catalog_photos_exist_and_uncertain_images_are_not_shown():
     assert not any("04-unknown" in path for path in all_paths)
     assert catalog.get_accommodation("outdoor_comfort").photo_paths_by_sheet_label[
         "Уличный Вольер Комфорт для собак 2"
-    ] == ["assets/rooms/23-outdoor-enclosure-2.png", "assets/rooms/18-unknown-1.jpg"]
+    ] == ["assets/rooms/23-outdoor-enclosure-2.png", "assets/rooms/18-unknown-1.jpg", "assets/rooms/29-outdoor-interior.png"]

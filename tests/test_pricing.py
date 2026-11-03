@@ -85,6 +85,7 @@ def test_promo_discount_when_rule_active(pricing, catalog):
             date_to=date(2026, 10, 12),
             promo_code="DOBROLAP5",
             promo_eligible=True,
+            promo_at=date(2026, 10, 10),
         )
         base = 1900 * 2
         discount = -int(round(base * 0.05))

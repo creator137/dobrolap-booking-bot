@@ -47,6 +47,7 @@ services:
     applies_to: [cat]
 
   - id: nail_trim
+    applies_to: [dog, cat]
     name: "Стрижка когтей"
     price_from_rub: 200
     price_to_rub: 350
@@ -60,12 +61,14 @@ services:
     notes: "Прибавляется к дневной стоимости"
 
   - id: zoo_taxi
+    applies_to: [dog, cat]
     name: "Зоотакси"
     price_from_rub: 600
     unit: one_way
     notes: "Рекомендуется туда-обратно ×2"
 
   - id: walk
+    applies_to: [dog]
     name: "Выгул"
     price_from_rub: 800
     unit: visit
