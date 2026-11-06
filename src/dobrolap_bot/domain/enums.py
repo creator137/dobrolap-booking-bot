@@ -20,7 +20,22 @@ class PetKind(StrEnum):
     HAMSTER = "hamster"
     BIRD = "bird"
     GUINEA_PIG = "guinea_pig"
+    FERRET = "ferret"
     OTHER = "other"
+
+
+# Мелкие животные в клетке: вместе в одной клетке — +100 ₽/сут. на каждого следующего;
+# в разных клетках — скидка 50% на второго и следующих.
+CAGE_PET_KINDS = frozenset(
+    {
+        PetKind.RABBIT,
+        PetKind.RAT,
+        PetKind.HAMSTER,
+        PetKind.GUINEA_PIG,
+        PetKind.BIRD,
+        PetKind.FERRET,
+    }
+)
 
 
 class DogSizeClass(StrEnum):

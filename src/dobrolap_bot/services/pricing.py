@@ -4,7 +4,7 @@ from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from dobrolap_bot.config.loader import Catalog
-from dobrolap_bot.domain.enums import FeedingOption, PriceScope
+from dobrolap_bot.domain.enums import CAGE_PET_KINDS, FeedingOption, PriceScope
 from dobrolap_bot.domain.models import (
     Accommodation,
     DailyRate,
@@ -13,6 +13,9 @@ from dobrolap_bot.domain.models import (
     QuoteLine,
     PriceRule,
 )
+
+# Доплата за каждого следующего мелкого питомца в одной клетке (₽/сутки).
+SAME_CAGE_EXTRA_RUB_PER_DAY = 100
 
 
 class PricingService:
@@ -48,18 +51,40 @@ class PricingService:
         if is_season:
             notes.append("Период заезда входит в сезон отпусков/праздников — цены по сезонному прайсу.")
 
-        multi_pet_discount_rate = 0.5 if together else 0.3
+        cage_group = bool(pets) and all(pet.kind in CAGE_PET_KINDS for pet in pets)
+        # Мелкие в одной клетке: без %-скидки, +100 ₽/сут. на каждого следующего.
+        # В разных клетках: скидка 50% на второго и следующих.
+        if cage_group and len(pets) > 1:
+            multi_pet_discount_rate = 0.0 if together else 0.5
+        else:
+            multi_pet_discount_rate = 0.5 if together else 0.3
         multi_pet_discount_pct = int(multi_pet_discount_rate * 100)
         if len(pets) > 1:
-            placement_word = "Совместное" if together else "Раздельное"
-            notes.append(
-                f"{placement_word} размещение: скидка {multi_pet_discount_pct}% на проживание "
-                "второго и каждого следующего питомца."
-            )
+            if cage_group and together:
+                notes.append(
+                    "Мелкие животные в одной клетке: +100 ₽/сутки на каждого следующего питомца."
+                )
+            elif cage_group:
+                notes.append(
+                    "Мелкие животные в разных клетках: скидка 50% на проживание "
+                    "второго и каждого следующего питомца."
+                )
+            else:
+                placement_word = "Совместное" if together else "Раздельное"
+                notes.append(
+                    f"{placement_word} размещение: скидка {multi_pet_discount_pct}% на проживание "
+                    "второго и каждого следующего питомца."
+                )
 
         shared_pet_discount = 0
         pet_units: dict[int, Accommodation | None] = {index: unit for index in range(len(pets))}
-        pet_discount_rates = {index: (multi_pet_discount_rate if index else 0) for index in range(len(pets))}
+        pet_discount_rates = {
+            index: (multi_pet_discount_rate if index else 0) for index in range(len(pets))
+        }
+        same_cage_extra_indices: set[int] = set()
+        if cage_group and together and len(pets) > 1:
+            same_cage_extra_indices = set(range(1, len(pets)))
+            pet_discount_rates = {index: 0 for index in range(len(pets))}
         if room_assignments:
             if len(room_assignments) > 1 and any(len(item["pet_indices"]) > 1 for item in room_assignments):
                 notes = [note for note in notes if "размещение: скидка" not in note]
@@ -83,13 +108,18 @@ class PricingService:
                     if whole_group_manual:
                         notes.append(
                             "Ориентировочный расчёт до подбора помещения руководителем; "
-                            "скидку на совместное размещение учтём после подтверждения."
+                            "окончательную стоимость подтвердит руководитель."
                         )
                         for position, index in enumerate(item["pet_indices"]):
                             pet_units[index] = unit
-                            pet_discount_rates[index] = (
-                                multi_pet_discount_rate if position else 0
-                            )
+                            if cage_group and together:
+                                pet_discount_rates[index] = 0
+                                if position:
+                                    same_cage_extra_indices.add(index)
+                            else:
+                                pet_discount_rates[index] = (
+                                    multi_pet_discount_rate if position else 0
+                                )
                     else:
                         notes.append(
                             "Часть питомцев без автоматического помещения — цену подтвердит оператор."
@@ -103,7 +133,20 @@ class PricingService:
                     raise ValueError("unknown_unit")
                 for position, index in enumerate(item["pet_indices"]):
                     pet_units[index] = assigned_unit
-                    pet_discount_rates[index] = 0.5 if position else (0.3 if group_index else 0)
+                    group_pets = [pets[i] for i in item["pet_indices"]]
+                    group_cage = all(p.kind in CAGE_PET_KINDS for p in group_pets)
+                    if group_cage and len(item["pet_indices"]) > 1:
+                        # Shared cage assignment inside one room.
+                        pet_discount_rates[index] = 0
+                        if position:
+                            same_cage_extra_indices.add(index)
+                    else:
+                        pet_discount_rates[index] = (
+                            0.5 if position else (0.3 if group_index else 0)
+                        )
+                        if group_cage and not position and group_index:
+                            # Separate cages across rooms: 50% on each next cage group lead.
+                            pet_discount_rates[index] = 0.5 if group_index else 0
         tariff_subtotals: dict[str, int] = {}
         for pet_index, pet in enumerate(pets):
             unit = pet_units[pet_index]
@@ -128,6 +171,23 @@ class PricingService:
                         amount_rub=0,
                         detail="Тариф этого помещения не подтверждён руководителем зоогостиницы",
                         provisional=True,
+                    )
+                )
+                continue
+            if pet_index in same_cage_extra_indices:
+                amount = SAME_CAGE_EXTRA_RUB_PER_DAY * nights
+                tariff_subtotals[unit.tariff_kind] = (
+                    tariff_subtotals.get(unit.tariff_kind, 0) + amount
+                )
+                lines.append(
+                    QuoteLine(
+                        scope=PriceScope.ACCOMMODATION,
+                        label=(
+                            f"Доплата за совместную клетку {nights} сут.: "
+                            f"+{SAME_CAGE_EXTRA_RUB_PER_DAY} ₽/сут. / {pet.name}"
+                        ),
+                        amount_rub=amount,
+                        detail="Мелкие животные в одной клетке: +100 ₽/сутки на каждого следующего",
                     )
                 )
                 continue

@@ -34,6 +34,8 @@ KIND_MAP = {
     "птица": PetKind.BIRD,
     "морская свинка": PetKind.GUINEA_PIG,
     "свинка": PetKind.GUINEA_PIG,
+    "хорёк": PetKind.FERRET,
+    "хорек": PetKind.FERRET,
     "другое": PetKind.OTHER,
 }
 

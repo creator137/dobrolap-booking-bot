@@ -87,7 +87,8 @@ def pet_kind_kb(
             [KeyboardButton(text="Собака"), KeyboardButton(text="Кошка")],
             [KeyboardButton(text="Кролик"), KeyboardButton(text="Крыса")],
             [KeyboardButton(text="Хомяк"), KeyboardButton(text="Птица")],
-            [KeyboardButton(text="Морская свинка"), KeyboardButton(text="Другое")],
+            [KeyboardButton(text="Морская свинка"), KeyboardButton(text="Хорёк")],
+            [KeyboardButton(text="Другое")],
         ]
     return ReplyKeyboardMarkup(
         keyboard=rows,

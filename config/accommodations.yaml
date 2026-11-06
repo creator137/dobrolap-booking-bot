@@ -31,7 +31,7 @@ accommodations:
     name: "Тихая комната для грызунов (в собственной клетке)"
     sheet_unit_id: "2 этаж балкон"
     tariff_kind: vip_plus
-    allowed_species: [rabbit, rat, hamster, guinea_pig, bird]
+    allowed_species: [rabbit, rat, hamster, guinea_pig, bird, ferret]
     features: [indoor, cage, balcony]
     photo_paths:
       - assets/rooms/05-balcony.jpg

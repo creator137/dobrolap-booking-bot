@@ -51,6 +51,7 @@ PET_KIND_LABELS = {
     PetKind.HAMSTER: "Хомяк",
     PetKind.BIRD: "Птица",
     PetKind.GUINEA_PIG: "Морская свинка",
+    PetKind.FERRET: "Хорёк",
     PetKind.OTHER: "Другой питомец",
 }
 
@@ -229,7 +230,14 @@ def _pet_lines(pet: PetProfile, *, prefix: str = "") -> list[str]:
             f"{indent}  Ветпаспорт: "
             + (f"загружено фото — {len(pet.passport_file_ids)}" if pet.passport_file_ids else "фото не загружено")
         )
-    elif pet.kind in {PetKind.BIRD, PetKind.RABBIT, PetKind.RAT, PetKind.HAMSTER, PetKind.GUINEA_PIG}:
+    elif pet.kind in {
+        PetKind.BIRD,
+        PetKind.RABBIT,
+        PetKind.RAT,
+        PetKind.HAMSTER,
+        PetKind.GUINEA_PIG,
+        PetKind.FERRET,
+    }:
         lines.append(f"{indent}  Владелец должен привезти собственную клетку (обязательно).")
     features = behavior_labels(pet)
     lines.append(f"{indent}  Поведение: " + (", ".join(features) if features else "особенности не отмечены"))
