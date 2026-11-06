@@ -44,6 +44,7 @@ def test_menu_has_zoopsych_and_trainer_programs():
     assert "Кинолог (собаки)" in labels
     assert "Зоопсихолог (кошки)" in labels
     assert "Выгул (собаки)" in labels
+    assert "МедУход" not in labels
     programs = [b.text for row in trainer_program_kb().keyboard for b in row]
     assert "Коррекция проблемного поведения" in programs
     assert "Курс «Управляемая городская собака»" in programs

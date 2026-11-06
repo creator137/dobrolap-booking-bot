@@ -172,6 +172,7 @@ def _available_services(catalog: Catalog, pets: list[PetProfile], *, service_onl
         if service.active
         and service.id != "natural_feeding"
         and (service_only or service.id not in {"walk", "dogsitter", "cat_nanny"})
+        and (not service_only or service.id != "med_care")
         and (not service.applies_to or pet_kinds.issubset(set(service.applies_to)))
     }
     ordered = [by_id[i] for i in preferred if i in by_id]
@@ -193,12 +194,12 @@ def _available_services(catalog: Catalog, pets: list[PetProfile], *, service_onl
             "walk": {"walk"},
             "trainer": {"dog_trainer"},
             "zoopsych": {"zoopsychologist"},
-            "care": {"med_care"},
             "home": {"dogsitter", "cat_nanny"},
         }
         ordered = [item for item in ordered if item.id in categories.get(service_category, set())]
     if pet_kinds and not pet_kinds & {PetKind.DOG, PetKind.CAT}:
-        ordered = [item for item in ordered if item.id == "med_care"]
+        # Грызуны/птицы: в передержке только медуход; в разовых услугах отдельных позиций нет.
+        ordered = [item for item in ordered if item.id == "med_care"] if not service_only else []
     return ordered
 
 
@@ -641,7 +642,6 @@ async def set_service_location(message: Message, state: FSMContext, assets_dir: 
         "выгул (собаки)": "walk",
         "кинолог (собаки)": "trainer",
         "зоопсихолог (кошки)": "zoopsych",
-        "медуход": "care",
         "выезд на дом (зооняня)": "home",
     }
     category = categories.get(text)
@@ -2030,8 +2030,8 @@ async def _ask_services(message: Message, state: FSMContext, catalog: Catalog) -
         await state.set_state(BookingForm.service_location)
         await message.answer(
             "Эта услуга не подходит выбранным питомцам. "
-            "Для птиц и грызунов доступен медуход; груминг — для кошек и собак; "
-            "выгул и кинолог — только для собак; зоопсихолог — для кошек. "
+            "Груминг — для кошек и собак; выгул и кинолог — только для собак; "
+            "зоопсихолог — для кошек. МедУход доступен только при передержке. "
             "Выберите другую услугу.",
             reply_markup=service_location_kb(),
         )

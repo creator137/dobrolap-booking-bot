@@ -145,7 +145,6 @@ def service_location_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="В зоогостиницу на груминг")],
             [KeyboardButton(text="Зоотакси"), KeyboardButton(text="Выгул (собаки)")],
             [KeyboardButton(text="Кинолог (собаки)"), KeyboardButton(text="Зоопсихолог (кошки)")],
-            [KeyboardButton(text="МедУход")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,

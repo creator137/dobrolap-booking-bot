@@ -14,8 +14,13 @@ def test_service_matrix(kind):
     catalog = load_catalog(ROOT / 'config')
     pets = [PetProfile(kind=kind, name='Test')]
     ids = {s.id for s in h._available_services(catalog, pets, service_only=True)}
+    boarding = {s.id for s in h._available_services(catalog, pets, service_only=False)}
+    assert 'med_care' not in ids  # МедУход только с передержкой
     if kind not in {PetKind.DOG, PetKind.CAT}:
-        assert ids == {'med_care'}
+        assert ids == set()
+        assert boarding == {'med_care'}
+    else:
+        assert 'med_care' in boarding
     if kind != PetKind.DOG:
         assert not ids & {'walk', 'dog_trainer', 'dogsitter'}
     groom = {s.id for s in h._available_services(catalog, pets, service_only=True, service_category='grooming')}
@@ -41,10 +46,21 @@ async def test_old_service_selection_is_removed():
 
 @pytest.mark.asyncio
 async def test_category_change_preserves_date_and_profiles():
-    pet = PetProfile(kind=PetKind.RAT, name='Test')
+    pet = PetProfile(kind=PetKind.DOG, name='Test', weight_kg=8)
     state = State(service_only=True, pets=[pet.model_dump(mode='json')], date_from='2027-11-20', arrival_time='16:00')
-    msg = message('МедУход')
+    msg = message('Выгул (собаки)')
     await h.set_service_location(msg, state, ROOT / 'assets', load_catalog(ROOT / 'config'))
-    assert state.current == h.BookingForm.services
+    assert state.current == h.BookingForm.service_address
     assert state.data['date_from'] == '2027-11-20'
     assert len(state.data['pets']) == 1
+    assert state.data['service_category'] == 'walk'
+
+
+@pytest.mark.asyncio
+async def test_medcare_removed_from_one_off_menu():
+    labels = [b.text for row in h.service_location_kb().keyboard for b in row]
+    assert 'МедУход' not in labels
+    catalog = load_catalog(ROOT / 'config')
+    dog = [PetProfile(kind=PetKind.DOG, name='Test', weight_kg=8)]
+    assert 'med_care' not in {s.id for s in h._available_services(catalog, dog, service_only=True)}
+    assert 'med_care' in {s.id for s in h._available_services(catalog, dog, service_only=False)}
