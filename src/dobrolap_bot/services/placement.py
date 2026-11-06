@@ -88,15 +88,31 @@ class PlacementService:
                 owner_flags=owner_flags + ["no_shared_unit_for_group"],
             )
 
+        mixed_species = len({pet.kind for pet in pets}) > 1
+        if mixed_species:
+            owner_flags.append("mixed_species_together_request")
+            requires_manual = True
+
         by_id = {c.accommodation.id: c for c in per_pet[0]}
         merged: list[PlacementCandidate] = []
         for unit_id in common_ids:
             base = by_id[unit_id]
-            if not self.group_allowed(pets, base.accommodation):
+            if self.group_allowed(pets, base.accommodation):
+                if requires_manual or for_owner:
+                    base = base.model_copy(update={"requires_owner_review": True})
+                merged.append(base)
                 continue
-            if requires_manual or for_owner:
-                base = base.model_copy(update={"requires_owner_review": True})
-            merged.append(base)
+            # Different species together only after owner approval — still show
+            # rooms that accept all species so the client sees a price orientation.
+            if (
+                mixed_species
+                and not any(pet.in_heat for pet in pets)
+                and set(pet.kind for pet in pets).issubset(set(base.accommodation.allowed_species))
+                and self.group_capacity_ok(pets, base.accommodation)
+            ):
+                merged.append(
+                    base.model_copy(update={"requires_owner_review": True})
+                )
 
         merged.sort(key=lambda c: (-c.score, c.accommodation.name))
         top = merged[:limit]
@@ -207,15 +223,18 @@ class PlacementService:
         )
 
     @staticmethod
-    def group_allowed(pets: list[PetProfile], unit: Accommodation) -> bool:
+    def group_capacity_ok(pets: list[PetProfile], unit: Accommodation) -> bool:
+        """Room size / weight limits ignoring mixed-species policy."""
         count = len(pets)
-        if count > 1 and (any(p.in_heat for p in pets) or len({p.kind for p in pets}) > 1):
-            return False
         tariff = unit.tariff_kind
         if tariff in {"optimal_s", "economy"}:
             return count <= 1
         if tariff in {"standard_m", "standard_l"}:
-            return count <= 3 and all((p.kind == PetKind.CAT and p.weight_kg is None) or (p.weight_kg is not None and p.weight_kg <= 10) for p in pets)
+            return count <= 3 and all(
+                (p.kind == PetKind.CAT and p.weight_kg is None)
+                or (p.weight_kg is not None and p.weight_kg <= 10)
+                for p in pets
+            )
         if tariff in {"comfort", "comfort_plus"}:
             if all(p.kind == PetKind.CAT for p in pets):
                 return count <= (4 if tariff == "comfort" else 6)
@@ -226,7 +245,16 @@ class PlacementService:
                 if tariff == "comfort":
                     return count <= 2 and max(weights) <= 20
                 return (count <= 2 and max(weights) <= 25) or (count <= 3 and max(weights) <= 15)
-        return True
+            # Mixed species: only small groups, owner confirms compatibility.
+            return count <= 2
+        return count <= 2
+
+    @staticmethod
+    def group_allowed(pets: list[PetProfile], unit: Accommodation) -> bool:
+        count = len(pets)
+        if count > 1 and (any(p.in_heat for p in pets) or len({p.kind for p in pets}) > 1):
+            return False
+        return PlacementService.group_capacity_ok(pets, unit)
 
     def _dog_needs_manual(self, pet: PetProfile) -> bool:
         b = pet.behavior

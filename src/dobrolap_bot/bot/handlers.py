@@ -1446,18 +1446,13 @@ async def add_another(
             )
             await _ask_services(message, state, catalog)
             return
-        pets_count = len(data.get("pets") or [])
-        await state.update_data(tariff_choice=None, room_assignments=[], placement_group_index=0, together_unavailable=False)
-        if pets_count > 1:
-            await state.set_state(BookingForm.placement_together)
-            await message.answer(
-                "Как разместить питомцев? Вместе — скидка 50% на второго и последующих; "
-                "раздельно — 30%. Для более двух питомцев можно выбрать «Частично» и указать группы.",
-                reply_markup=placement_together_kb(partial=pets_count > 2),
-            )
-        else:
-            await state.update_data(placement_groups=[[0]], placement_together=True, together_unavailable=False)
-            await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
+        await state.update_data(
+            tariff_choice=None,
+            room_assignments=[],
+            placement_group_index=0,
+            together_unavailable=False,
+        )
+        await _ask_tariff_choice(message, state, catalog, assets_dir)
         return
     await message.answer("Выберите кнопку.", reply_markup=add_pet_kb())
 
@@ -1603,26 +1598,17 @@ async def set_placement_together(
             placement_flags=flags,
             placement_groups=[list(range(count))],
             placement_group_index=0,
-            room_assignments=[
-                {
-                    "pet_indices": list(range(count)),
-                    "unit_id": None,
-                    "sheet_label": None,
-                    "manual": True,
-                }
-            ],
+            room_assignments=[],
             unit_id=None,
             requested_sheet_label=None,
             manual_matching=True,
             together_unavailable=False,
         )
-        await state.set_state(BookingForm.feeding)
         await message.answer(
-            "Запрос на совместное размещение разных видов передам руководителю. "
-            "Скидку 50% на второго и следующих питомцев учтём после согласования.\n\n"
-            "Как будем кормить?",
-            reply_markup=_feeding_keyboard(await state.get_data()),
+            "Разные виды вместе — только после согласования с руководителем. "
+            "Покажу ориентировочные варианты со скидкой 50%; итог подтвердит руководитель."
         )
+        await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
         return
     if text == "частично" and count > 2:
         await state.set_state(BookingForm.placement_groups)
@@ -1648,39 +1634,10 @@ async def set_placement_together(
     pets_kinds = {
         PetProfile.model_validate(pet).kind for pet in (data.get("pets") or [])
     }
-    if together and len(pets_kinds) > 1:
-        flags = sorted(
-            set(data.get("placement_flags") or [])
-            | {"mixed_species_together_request", "manual_matching"}
-        )
-        await state.update_data(
-            placement_together=True,
-            placement_flags=flags,
-            placement_groups=[list(range(count))],
-            placement_group_index=0,
-            room_assignments=[
-                {
-                    "pet_indices": list(range(count)),
-                    "unit_id": None,
-                    "sheet_label": None,
-                    "manual": True,
-                }
-            ],
-            unit_id=None,
-            requested_sheet_label=None,
-            manual_matching=True,
-        )
-        await state.set_state(BookingForm.feeding)
-        await message.answer(
-            "Разные виды вместе размещаем только после согласования с руководителем. "
-            "Заявку отправлю на ручной подбор; скидку 50% на второго питомца учтём после подтверждения.\n\n"
-            "Как будем кормить?",
-            reply_markup=_feeding_keyboard(await state.get_data()),
-        )
-        return
     flags = sorted(
         set(data.get("placement_flags") or [])
         | (set() if together else {"separate_placement"})
+        | ({"mixed_species_together_request"} if together and len(pets_kinds) > 1 else set())
     )
     groups = [list(range(count))] if together else [[index] for index in range(count)]
     await state.update_data(
@@ -1689,7 +1646,14 @@ async def set_placement_together(
         placement_groups=groups,
         placement_group_index=0,
         room_assignments=[],
+        manual_matching=bool(together and len(pets_kinds) > 1),
     )
+    if together and len(pets_kinds) > 1:
+        await message.answer(
+            "Разные виды вместе размещаем только после согласования с руководителем. "
+            "Покажу ориентировочные варианты и цены со скидкой 50% на второго питомца; "
+            "окончательную стоимость подтвердит руководитель."
+        )
     await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
 
 
@@ -2024,8 +1988,24 @@ async def _ask_services(message: Message, state: FSMContext, catalog: Catalog) -
     await message.answer("Переходим к дополнительным услугам.", reply_markup=ReplyKeyboardRemove())
     data = await state.get_data()
     pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
-    available = _available_services(catalog, pets, service_only=bool(data.get("service_only")), service_category=data.get("service_category"))
-    items = [(s.id, service_option_label(s), False) for s in available]
+    available = _available_services(
+        catalog,
+        pets,
+        service_only=bool(data.get("service_only")),
+        service_category=data.get("service_category"),
+    )
+    selected = set(data.get("service_ids") or [])
+    needs_med = (not data.get("service_only")) and any(
+        pet.behavior.needs_treatment for pet in pets
+    )
+    if needs_med and any(service.id == "med_care" for service in available):
+        selected.add("med_care")
+        await state.update_data(service_ids=sorted(selected))
+        await message.answer(
+            "У питомца отмечены лекарства или процедуры — добавил «МедУход» в услуги. "
+            "Можно снять галочку, если не нужно."
+        )
+    items = [(s.id, service_option_label(s), s.id in selected) for s in available]
     if not items and data.get("service_only"):
         await state.set_state(BookingForm.service_location)
         await message.answer(
@@ -2049,6 +2029,30 @@ async def _ask_services(message: Message, state: FSMContext, catalog: Catalog) -
         "Если выберете зоотакси, попрошу адрес для расчёта поездки. Нажмите «Готово», когда закончите.",
         reply_markup=services_kb(items),
     )
+
+
+def _estimate_unit_for_summary(catalog: Catalog, pets: list[PetProfile], data: dict):
+    """Pick a room for orientation pricing when placement is still manual."""
+    tariff = data.get("tariff_choice")
+    kinds = {pet.kind for pet in pets}
+    candidates = [
+        unit
+        for unit in catalog.active_accommodations()
+        if kinds.issubset(set(unit.allowed_species))
+        and (not tariff or unit.tariff_kind == tariff)
+    ]
+    if not candidates:
+        candidates = [
+            unit
+            for unit in catalog.active_accommodations()
+            if not tariff or unit.tariff_kind == tariff
+        ]
+    preferred = ("comfort", "comfort_plus", "vip", "standard_m", "standard_l")
+    for unit_id in preferred:
+        for unit in candidates:
+            if unit.id == unit_id or unit.tariff_kind == unit_id:
+                return unit
+    return candidates[0] if candidates else None
 
 
 @router.message(BookingForm.feeding_source)
@@ -2234,9 +2238,8 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
                 unit = catalog.get_accommodation(assigned_id)
                 if unit:
                     break
-    if unit is None and assignments and not data.get("service_only"):
-        active = catalog.active_accommodations()
-        unit = active[0] if active else None
+    if unit is None and not data.get("service_only"):
+        unit = _estimate_unit_for_summary(catalog, pets, data)
 
     if unit and not data.get("service_only"):
         quote = PricingService(catalog).quote(

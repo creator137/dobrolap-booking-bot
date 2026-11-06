@@ -74,12 +74,29 @@ class PricingService:
                 raw_unit_id = item.get("unit_id")
                 if item.get("manual") or not raw_unit_id:
                     provisional = True
-                    notes.append(
-                        "Часть питомцев без автоматического помещения — цену подтвердит оператор."
+                    # Whole-group manual (e.g. mixed species together): keep an
+                    # orientation price on the default unit with placement discounts.
+                    whole_group_manual = (
+                        len(room_assignments) == 1
+                        and sorted(item["pet_indices"]) == list(range(len(pets)))
                     )
-                    for index in item["pet_indices"]:
-                        pet_units[index] = None
-                        pet_discount_rates[index] = 0
+                    if whole_group_manual:
+                        notes.append(
+                            "Ориентировочный расчёт до подбора помещения руководителем; "
+                            "скидку на совместное размещение учтём после подтверждения."
+                        )
+                        for position, index in enumerate(item["pet_indices"]):
+                            pet_units[index] = unit
+                            pet_discount_rates[index] = (
+                                multi_pet_discount_rate if position else 0
+                            )
+                    else:
+                        notes.append(
+                            "Часть питомцев без автоматического помещения — цену подтвердит оператор."
+                        )
+                        for index in item["pet_indices"]:
+                            pet_units[index] = None
+                            pet_discount_rates[index] = 0
                     continue
                 assigned_unit = self.catalog.get_accommodation(raw_unit_id)
                 if assigned_unit is None:

@@ -130,6 +130,76 @@ async def test_zoopsych_cats_only_flow():
     assert ids == {"zoopsychologist"}
 
 
+@pytest.mark.asyncio
+async def test_mixed_together_shows_priced_orientation_not_zero():
+    from datetime import date
+    from dobrolap_bot.services.placement import PlacementService
+    from dobrolap_bot.services.pricing import PricingService
+    from dobrolap_bot.domain.enums import FeedingOption
+
+    catalog = load_catalog(ROOT / "config")
+    cat = PetProfile(kind=PetKind.CAT, name="О", weight_kg=3, vaccinated=True, parasite_treated=True)
+    dog = PetProfile(kind=PetKind.DOG, name="Собака", weight_kg=3, vaccinated=True, parasite_treated=True)
+    result = PlacementService(catalog).suggest([cat, dog], tariff_kind="comfort")
+    assert result.candidates
+    assert all(c.requires_owner_review for c in result.candidates)
+    assert "mixed_species_together_request" in result.owner_flags
+
+    quote = PricingService(catalog).quote(
+        pets=[cat, dog],
+        unit=catalog.get_accommodation("comfort"),
+        date_from=date(2026, 11, 27),
+        date_to=date(2026, 11, 30),
+        together=True,
+        feeding=FeedingOption.OWNER_FOOD,
+        room_assignments=[
+            {"pet_indices": [0, 1], "unit_id": None, "sheet_label": None, "manual": True}
+        ],
+    )
+    assert quote.total_rub > 0
+    assert "со скидкой" in quote.explanation
+    text = format_draft_summary(
+        data={
+            "date_from": "2026-11-27",
+            "date_to": "2026-11-30",
+            "unit_id": None,
+            "customer_contact": "+7",
+            "feeding": "owner_food",
+            "placement_together": True,
+            "room_assignments": [
+                {"pet_indices": [0, 1], "unit_id": None, "manual": True}
+            ],
+            "tariff_choice": "comfort",
+        },
+        pets=[cat, dog],
+        catalog=catalog,
+        quote=quote,
+    )
+    assert "≈ 0 ₽/сут" not in text
+    assert "1900 ₽/сут" in text or "₽/сут" in text
+    assert "без скидки" in text.lower()
+    assert "Предварительная стоимость проживания: 0 ₽" not in text
+
+
+@pytest.mark.asyncio
+async def test_needs_treatment_preselects_medcare_for_boarding():
+    from dobrolap_bot.domain.models import BehaviorFlags
+
+    catalog = load_catalog(ROOT / "config")
+    pet = PetProfile(
+        kind=PetKind.DOG,
+        name="Бобик",
+        weight_kg=8,
+        behavior=BehaviorFlags(needs_treatment=True),
+    )
+    state = State(service_only=False, pets=[pet.model_dump(mode="json")], service_ids=[])
+    msg = message("")
+    await h._ask_services(msg, state, catalog)
+    assert "med_care" in state.data["service_ids"]
+    answered = " ".join(c.args[0] for c in msg.answer.call_args_list if c.args)
+    assert "МедУход" in answered
+
+
 def test_summary_shows_program_and_period():
     catalog = load_catalog(ROOT / "config")
     data = {
