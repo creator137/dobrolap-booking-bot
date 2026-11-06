@@ -253,12 +253,62 @@ def service_option_label(service: ServiceOffering) -> str:
     return f"{service.name} — {price}{unit}"
 
 
-def _service_location_text(data: dict) -> str:
-    location = data.get("service_location") or (data.get("service_details") or {}).get("service_location")
+def _service_category_label(data: dict) -> str | None:
+    details = data.get("service_details") or {}
+    category = data.get("service_category") or details.get("service_category")
     return {
+        "grooming": "Груминг",
+        "taxi": "Зоотакси",
+        "walk": "Выгул (собаки)",
+        "trainer": "Кинолог (собаки)",
+        "zoopsych": "Зоопсихолог (кошки)",
+        "care": "МедУход",
         "home": "Выезд на дом (зооняня)",
-        "hotel": "В зоогостинице — груминг",
-    }.get(location, "Место услуги: уточняется")
+    }.get(category)
+
+
+def _service_location_text(data: dict) -> str:
+    details = data.get("service_details") or {}
+    location = data.get("service_location") or details.get("service_location")
+    category = data.get("service_category") or details.get("service_category")
+    if location == "hotel":
+        if category in {None, "", "grooming"}:
+            return "В зоогостинице — груминг"
+        if category == "trainer":
+            return "Кинолог (собаки): по адресу зоогостиницы"
+        if category == "zoopsych":
+            return "Зоопсихолог (кошки): по адресу зоогостиницы"
+        return "По адресу зоогостиницы"
+    if location == "home":
+        if category in {None, "", "home"}:
+            return "Выезд на дом (зооняня)"
+        if category == "walk":
+            return "Выгул (собаки): по адресу клиента"
+        if category == "trainer":
+            return "Кинолог (собаки): по вашему адресу"
+        if category == "zoopsych":
+            return "Зоопсихолог (кошки): по вашему адресу"
+        if category == "taxi":
+            return "Зоотакси: адрес клиента"
+        return "По вашему адресу"
+    return "Место услуги: уточняется"
+
+
+def _trainer_program_text(data: dict) -> str | None:
+    details = data.get("service_details") or {}
+    label = data.get("trainer_program_label") or details.get("trainer_program_label")
+    if label:
+        return f"Программа кинолога: {label}"
+    program = data.get("trainer_program") or details.get("trainer_program")
+    return f"Программа кинолога: {program}" if program else None
+
+
+def _service_visit_dates_text(data: dict) -> str:
+    date_from = date.fromisoformat(data["date_from"])
+    date_to = date.fromisoformat(data["date_to"])
+    if (date_to - date_from).days > 1:
+        return f"Период услуги: {format_date(date_from)} — {format_date(date_to)}"
+    return f"Дата визита: {format_date(date_from)}"
 
 
 def _arrival_notice(data: dict) -> str:
@@ -318,10 +368,20 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
         f"Telegram: {telegram}",
     ]
     if service_only:
-        lines.append(f"Дата визита: {format_date(booking.date_from)}")
+        lines.append(
+            _service_visit_dates_text(
+                {
+                    "date_from": booking.date_from.isoformat(),
+                    "date_to": booking.date_to.isoformat(),
+                }
+            )
+        )
         lines.append(f"Время визита: {booking.payload.get('arrival_time') or 'Не указано'}")
         lines.append(f"Адрес: {booking.payload.get('service_address') or 'Не указан'}")
         lines.append(_service_location_text(booking.payload))
+        program = _trainer_program_text(booking.payload)
+        if program:
+            lines.append(program)
     else:
         lines.append(f"Даты: {format_date(booking.date_from)} — {format_date(booking.date_to)}")
         lines.append(f"Время заезда: {booking.payload.get('arrival_time') or 'Не указано'}")
@@ -394,10 +454,20 @@ def format_client_status(booking: BookingRecord, catalog: Catalog) -> str:
         f"Статус: {status_label(booking.status)}",
     ]
     if service_only:
-        lines.append(f"Дата визита: {format_date(booking.date_from)}")
+        lines.append(
+            _service_visit_dates_text(
+                {
+                    "date_from": booking.date_from.isoformat(),
+                    "date_to": booking.date_to.isoformat(),
+                }
+            )
+        )
         lines.append(f"Время визита: {booking.payload.get('arrival_time') or 'Не указано'}")
         lines.append(f"Адрес: {booking.payload.get('service_address') or 'Не указан'}")
         lines.append(_service_location_text(booking.payload))
+        program = _trainer_program_text(booking.payload)
+        if program:
+            lines.append(program)
     else:
         lines.append(f"Даты: {format_date(booking.date_from)} — {format_date(booking.date_to)}")
         lines.append(f"Время заезда: {booking.payload.get('arrival_time') or 'Не указано'}")
@@ -434,10 +504,13 @@ def format_draft_summary(
     unit = catalog.get_accommodation(data.get("unit_id")) if data.get("unit_id") else None
     lines = ["Проверьте заявку", f"Телефон: {data.get('customer_contact') or 'Не указан'}"]
     if service_only:
-        lines.append(f"Дата визита: {format_date(date.fromisoformat(data['date_from']))}")
+        lines.append(_service_visit_dates_text(data))
         lines.append(f"Время визита: {data.get('arrival_time') or 'Не указано'}")
         lines.append(f"Адрес: {data.get('service_address') or 'Не указан'}")
         lines.append(_service_location_text(data))
+        program = _trainer_program_text(data)
+        if program:
+            lines.append(program)
     else:
         lines.append(
             f"Даты: {format_date(date.fromisoformat(data['date_from']))} — "

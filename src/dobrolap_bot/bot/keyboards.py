@@ -70,8 +70,17 @@ def arrival_time_kb() -> InlineKeyboardMarkup:
     )
 
 
-def pet_kind_kb(*, dogs_and_cats_only: bool = False) -> ReplyKeyboardMarkup:
-    if dogs_and_cats_only:
+def pet_kind_kb(
+    *,
+    dogs_and_cats_only: bool = False,
+    dogs_only: bool = False,
+    cats_only: bool = False,
+) -> ReplyKeyboardMarkup:
+    if dogs_only:
+        rows = [[KeyboardButton(text="Собака")]]
+    elif cats_only:
+        rows = [[KeyboardButton(text="Кошка")]]
+    elif dogs_and_cats_only:
         rows = [[KeyboardButton(text="Собака"), KeyboardButton(text="Кошка")]]
     else:
         rows = [
@@ -135,7 +144,35 @@ def service_location_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="Выезд на дом (зооняня)")],
             [KeyboardButton(text="В зоогостиницу на груминг")],
             [KeyboardButton(text="Зоотакси"), KeyboardButton(text="Выгул (собаки)")],
-            [KeyboardButton(text="Кинолог (собаки)"), KeyboardButton(text="МедУход")],
+            [KeyboardButton(text="Кинолог (собаки)"), KeyboardButton(text="Зоопсихолог (кошки)")],
+            [KeyboardButton(text="МедУход")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def service_place_kb() -> ReplyKeyboardMarkup:
+    """Hotel address or client's address (кинолог / зоопсихолог)."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Адрес зоогостиницы")],
+            [KeyboardButton(text="Ваш адрес")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def trainer_program_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Коррекция проблемного поведения")],
+            [KeyboardButton(text="Воспитательная дрессировка щенка")],
+            [KeyboardButton(text="Обучение командам")],
+            [KeyboardButton(text="Курс «Управляемая городская собака»")],
+            [KeyboardButton(text="Консультация")],
+            [KeyboardButton(text="Адаптация собаки из приюта")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
