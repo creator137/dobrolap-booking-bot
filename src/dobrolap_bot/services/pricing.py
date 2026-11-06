@@ -58,17 +58,30 @@ class PricingService:
             )
 
         shared_pet_discount = 0
-        pet_units = {index: unit for index in range(len(pets))}
+        pet_units: dict[int, Accommodation | None] = {index: unit for index in range(len(pets))}
         pet_discount_rates = {index: (multi_pet_discount_rate if index else 0) for index in range(len(pets))}
         if room_assignments:
             if len(room_assignments) > 1 and any(len(item["pet_indices"]) > 1 for item in room_assignments):
                 notes = [note for note in notes if "размещение: скидка" not in note]
-                notes.append("Частичное размещение: 50% на дополнительных питомцев в общей комнате, 30% на первого питомца в каждой следующей отдельной комнате.")
+                notes.append(
+                    "Частичное размещение: 50% на дополнительных питомцев в общей комнате, "
+                    "30% на первого питомца в каждой следующей отдельной комнате."
+                )
             indices = [index for item in room_assignments for index in item["pet_indices"]]
             if sorted(indices) != list(range(len(pets))):
                 raise ValueError("incomplete_room_assignments")
             for group_index, item in enumerate(room_assignments):
-                assigned_unit = self.catalog.get_accommodation(item["unit_id"])
+                raw_unit_id = item.get("unit_id")
+                if item.get("manual") or not raw_unit_id:
+                    provisional = True
+                    notes.append(
+                        "Часть питомцев без автоматического помещения — цену подтвердит оператор."
+                    )
+                    for index in item["pet_indices"]:
+                        pet_units[index] = None
+                        pet_discount_rates[index] = 0
+                    continue
+                assigned_unit = self.catalog.get_accommodation(raw_unit_id)
                 if assigned_unit is None:
                     raise ValueError("unknown_unit")
                 for position, index in enumerate(item["pet_indices"]):
@@ -77,6 +90,18 @@ class PricingService:
         tariff_subtotals: dict[str, int] = {}
         for pet_index, pet in enumerate(pets):
             unit = pet_units[pet_index]
+            if unit is None:
+                provisional = True
+                lines.append(
+                    QuoteLine(
+                        scope=PriceScope.ACCOMMODATION,
+                        label=f"Проживание: подбор оператора / {pet.name}",
+                        amount_rub=0,
+                        detail="Помещение и стоимость подтвердит руководитель зоогостиницы",
+                        provisional=True,
+                    )
+                )
+                continue
             if unit.tariff_unconfirmed:
                 provisional = True
                 lines.append(
@@ -124,7 +149,7 @@ class PricingService:
                     provisional=day_provisional or unit.tariff_kind == "vip",
                 )
             )
-            if pet_index > 0:
+            if discount_rate > 0:
                 discount = int(amount * discount_rate)
                 shared_pet_discount -= discount
                 lines.append(
@@ -208,6 +233,9 @@ class PricingService:
             half_day_total = 0
             for pet_index, pet in enumerate(pets):
                 unit = pet_units[pet_index]
+                if unit is None:
+                    provisional = True
+                    continue
                 arrival_rate = self._find_rate(pet, unit.rate_tariff_kind or unit.tariff_kind)
                 if arrival_rate is None or arrival_rate.unavailable:
                     provisional = True
@@ -242,14 +270,32 @@ class PricingService:
 
         total = sum(ln.amount_rub for ln in lines)
         deposit = self.deposit_amount(len(pets))
+        accommodation_gross = sum(
+            ln.amount_rub for ln in lines if ln.scope == PriceScope.ACCOMMODATION
+        )
+        accommodation_net = accommodation_gross + sum(
+            ln.amount_rub for ln in lines if ln.scope == PriceScope.DISCOUNT
+        )
+        day_net = accommodation_net // nights if nights else accommodation_net
+        day_gross = accommodation_gross // nights if nights else accommodation_gross
 
-        explanation_parts = [
-            f"Суток: {nights}.",
-            f"Залог отдельно: {deposit} ₽ "
-            f"(база {self.catalog.deposit_base_rub} + "
-            f"{self.catalog.deposit_extra_pet_rub} × доп. питомцы).",
-            "Полная стоимость проживания оплачивается при заезде.",
-        ]
+        explanation_parts = [f"Суток: {nights}."]
+        if accommodation_gross:
+            if accommodation_gross != accommodation_net:
+                explanation_parts.append(
+                    f"≈ {day_net} ₽/сут. проживания со скидкой "
+                    f"(без скидки ≈ {day_gross} ₽/сут.)."
+                )
+            else:
+                explanation_parts.append(f"≈ {day_net} ₽/сут. проживания.")
+        explanation_parts.extend(
+            [
+                f"Залог отдельно: {deposit} ₽ "
+                f"(база {self.catalog.deposit_base_rub} + "
+                f"{self.catalog.deposit_extra_pet_rub} × доп. питомцы).",
+                "Полная стоимость проживания оплачивается при заезде.",
+            ]
+        )
         explanation_parts.extend(notes)
         if provisional:
             explanation_parts.append(

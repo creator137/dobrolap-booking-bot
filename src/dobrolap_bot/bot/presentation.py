@@ -288,9 +288,13 @@ def placement_mode_label(data: dict) -> str:
 def room_assignment_lines(data: dict, pets: list[PetProfile], catalog: Catalog) -> list[str]:
     lines = []
     for item in data.get("room_assignments") or []:
-        unit = catalog.get_accommodation(item["unit_id"])
         names = ", ".join(pets[index].name for index in item["pet_indices"])
-        lines.append(f"{names} → {unit.name if unit else item['unit_id']} ({item['sheet_label']})")
+        if item.get("manual") or not item.get("unit_id"):
+            lines.append(f"{names} → подбирает руководитель зоогостиницы")
+            continue
+        unit = catalog.get_accommodation(item["unit_id"])
+        label = item.get("sheet_label") or "—"
+        lines.append(f"{names} → {unit.name if unit else item['unit_id']} ({label})")
     return lines
 
 
@@ -466,14 +470,48 @@ def format_draft_summary(
     if data.get("natural_food_source"):
         lines.append("Продукты для натурального питания: " + ("предоставляет хозяин питомца" if data["natural_food_source"] == "owner_provides" else "покупает гостиница, передаёт чеки"))
     if quote:
-        if quote.has_accommodation_amount:
+        nights = (
+            date.fromisoformat(data["date_to"]) - date.fromisoformat(data["date_from"])
+        ).days
+        if quote.has_accommodation_amount or any(
+            line.scope.value in {"accommodation", "discount"} for line in quote.lines
+        ):
             for line in quote.lines:
                 if line.scope.value in {"accommodation", "discount"}:
                     lines.append(f"{line.label}: {format_money(line.amount_rub)}")
-            lines.append(f"Предварительная стоимость: {format_money(quote.total_rub)}")
+            gross = sum(
+                line.amount_rub for line in quote.lines if line.scope.value == "accommodation"
+            )
+            discounts = sum(
+                line.amount_rub for line in quote.lines if line.scope.value == "discount"
+            )
+            net = gross + discounts
+            if discounts:
+                lines.append(f"Проживание без скидки: {format_money(gross)}")
+                lines.append(f"Скидка на питомцев: {format_money(discounts)}")
+                lines.append(f"Предварительно со скидкой: {format_money(net)}")
+                if nights > 0:
+                    lines.append(
+                        f"≈ {net // nights} ₽/сут. со скидкой "
+                        f"(без скидки ≈ {gross // nights} ₽/сут.)"
+                    )
+            else:
+                lines.append(f"Предварительная стоимость проживания: {format_money(net)}")
+                if nights > 0:
+                    lines.append(f"≈ {net // nights} ₽/сут.")
+            if quote.total_rub != net:
+                lines.append(f"Итого с питанием/услугами: {format_money(quote.total_rub)}")
+            if data.get("review_discount_claim"):
+                lines.append(
+                    "Заявлена скидка за отзыв: после проверки оператор согласует окончательную цену со скидкой."
+                )
             lines.append(quote.explanation)
         else:
             lines.append("Стоимость проживания сообщит оператор после уточнения условий.")
+            if data.get("review_discount_claim"):
+                lines.append(
+                    "Заявлена скидка за отзыв: после проверки оператор согласует окончательную цену со скидкой."
+                )
         lines.append(f"Залог: {format_money(quote.deposit_rub)}")
         if quote.provisional:
             lines.append("⚠️ В расчёте есть ориентировочные суммы. Итог подтвердит руководитель зоогостиницы.")

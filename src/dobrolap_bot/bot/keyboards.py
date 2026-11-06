@@ -70,13 +70,29 @@ def arrival_time_kb() -> InlineKeyboardMarkup:
     )
 
 
-def pet_kind_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
+def pet_kind_kb(*, dogs_and_cats_only: bool = False) -> ReplyKeyboardMarkup:
+    if dogs_and_cats_only:
+        rows = [[KeyboardButton(text="Собака"), KeyboardButton(text="Кошка")]]
+    else:
+        rows = [
             [KeyboardButton(text="Собака"), KeyboardButton(text="Кошка")],
             [KeyboardButton(text="Кролик"), KeyboardButton(text="Крыса")],
             [KeyboardButton(text="Хомяк"), KeyboardButton(text="Птица")],
             [KeyboardButton(text="Морская свинка"), KeyboardButton(text="Другое")],
+        ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def promo_choice_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Нет промокода / акций")],
+            [KeyboardButton(text="Есть промокод")],
+            [KeyboardButton(text="Скидка за отзыв (после проверки)")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,

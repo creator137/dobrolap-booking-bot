@@ -281,3 +281,52 @@ def test_arrival_08_to_11_adds_full_daily_rate(pricing, catalog):
         arrival_time="09:00",
     )
     assert quote.total_rub == 1900 * 2
+
+
+def test_day_rate_in_explanation_uses_net_after_discount(pricing, catalog):
+    pets = [
+        PetProfile(kind=PetKind.DOG, name="Ох", weight_kg=6),
+        PetProfile(kind=PetKind.DOG, name="Щен", weight_kg=6),
+    ]
+    quote = pricing.quote(
+        pets=pets,
+        unit=catalog.get_accommodation("comfort"),
+        date_from=date(2026, 10, 10),
+        date_to=date(2026, 10, 18),
+    )
+    assert "₽/сут. проживания со скидкой" in quote.explanation
+    assert "без скидки ≈" in quote.explanation
+    assert "Залог отдельно" in quote.explanation
+
+
+def test_manual_room_assignment_keeps_other_pet_price(pricing, catalog):
+    pets = [
+        PetProfile(kind=PetKind.CAT, name="Мурка"),
+        PetProfile(kind=PetKind.DOG, name="Бобик", weight_kg=10),
+    ]
+    rooms = [
+        {
+            "pet_indices": [0],
+            "unit_id": "comfort",
+            "sheet_label": "Комфорт 1",
+            "manual": False,
+        },
+        {
+            "pet_indices": [1],
+            "unit_id": None,
+            "sheet_label": None,
+            "manual": True,
+        },
+    ]
+    quote = pricing.quote(
+        pets=pets,
+        unit=catalog.get_accommodation("comfort"),
+        date_from=date(2026, 10, 10),
+        date_to=date(2026, 10, 12),
+        together=False,
+        room_assignments=rooms,
+    )
+    assert quote.provisional
+    assert any("Мурка" in line.label and line.amount_rub > 0 for line in quote.lines)
+    assert any("Бобик" in line.label and line.provisional for line in quote.lines)
+    assert "incomplete" not in quote.explanation.lower()
