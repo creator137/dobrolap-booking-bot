@@ -1580,7 +1580,11 @@ async def _ask_tariff_choice(
         reply_markup=ReplyKeyboardRemove(),
     )
     shown = set()
-    for unit in catalog.active_accommodations():
+    preview_units = sorted(
+        catalog.active_accommodations(),
+        key=lambda unit: (unit.id == "house_second_floor", unit.id != "second_floor_formulas"),
+    )
+    for unit in preview_units:
         if unit.tariff_kind in shown or not kinds.issubset(set(unit.allowed_species)):
             continue
         paths = unit.photos_for(pets)

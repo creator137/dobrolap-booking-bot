@@ -114,7 +114,7 @@ class PlacementService:
                     base.model_copy(update={"requires_owner_review": True})
                 )
 
-        merged.sort(key=lambda c: (-c.score, c.accommodation.name))
+        merged.sort(key=lambda c: (c.accommodation.id == "house_second_floor", -c.score, c.accommodation.name))
         top = merged[:limit]
 
         return PlacementResult(
