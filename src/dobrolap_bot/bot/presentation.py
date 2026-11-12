@@ -205,7 +205,7 @@ def placement_reason_label(reason: str) -> str:
     return PLACEMENT_REASON_LABELS.get(reason, "вариант подобран по анкете питомца")
 
 
-def _pet_lines(pet: PetProfile, *, prefix: str = "") -> list[str]:
+def _pet_lines(pet: PetProfile, *, prefix: str = "", service_only: bool = False) -> list[str]:
     title = f"{pet_kind_label(pet.kind)} — {pet.name}"
     lines = [f"{prefix}{title}"]
     indent = " " * len(prefix)
@@ -250,7 +250,8 @@ def _pet_lines(pet: PetProfile, *, prefix: str = "") -> list[str]:
         PetKind.GUINEA_PIG,
         PetKind.FERRET,
     }:
-        lines.append(f"{indent}  Владелец должен привезти собственную клетку (обязательно).")
+        if not service_only:
+            lines.append(f"{indent}  Владелец должен привезти собственную клетку (обязательно).")
     features = behavior_labels(pet)
     lines.append(f"{indent}  Поведение: " + (", ".join(features) if features else "особенности не отмечены"))
     if pet.behavior_notes and pet.behavior_notes.strip().lower() not in {"нет", "нет особенностей", "-"}:
@@ -418,7 +419,7 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
     lines.append("Питомцы")
     if pets:
         for index, pet in enumerate(pets, 1):
-            lines.extend(_pet_lines(pet, prefix=f"{index}. " if len(pets) > 1 else "• "))
+            lines.extend(_pet_lines(pet, prefix=f"{index}. " if len(pets) > 1 else "• ", service_only=service_only))
         if len(pets) > 1 and not service_only:
             lines.append("Размещение питомцев: " + placement_mode_label(booking.payload))
     else:
@@ -549,7 +550,7 @@ def format_draft_summary(
     lines.append("")
     lines.append("Питомцы")
     for index, pet in enumerate(pets, 1):
-        lines.extend(_pet_lines(pet, prefix=f"{index}. " if len(pets) > 1 else "• "))
+        lines.extend(_pet_lines(pet, prefix=f"{index}. " if len(pets) > 1 else "• ", service_only=service_only))
     if len(pets) > 1 and not service_only:
         lines.append("Размещение питомцев: " + placement_mode_label(data))
     lines.append("")

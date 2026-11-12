@@ -134,3 +134,9 @@ services:
     price_from_rub: 200
     price_to_rub: 1500
     applies_to: [dog]
+
+  - id: small_pet_nanny
+    name: "Зооняня (птицы и мелкие животные)"
+    unit: visit
+    applies_to: [rabbit, rat, hamster, guinea_pig, bird, ferret]
+    notes: "Условия ухода и стоимость определяет оператор индивидуально."

@@ -173,6 +173,9 @@ class PlacementService:
     def _evaluate(self, pet: PetProfile, unit: Accommodation) -> PlacementCandidate | None:
         if pet.kind not in unit.allowed_species:
             return None
+        if (pet.kind == PetKind.DOG and pet.weight_kg is not None and pet.weight_kg >= 20
+                and set(unit.features) & {"cage", "enclosure"} and unit.id != "premium_xxl"):
+            return None
         if pet.in_heat and "private" not in unit.features:
             return None
         if unit.id == "house_second_floor" and pet.kind == PetKind.DOG:

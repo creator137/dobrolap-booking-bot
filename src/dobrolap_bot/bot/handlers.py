@@ -201,12 +201,12 @@ def _available_services(catalog: Catalog, pets: list[PetProfile], *, service_onl
             "walk": {"walk"},
             "trainer": {"dog_trainer"},
             "zoopsych": {"zoopsychologist"},
-            "home": {"dogsitter", "cat_nanny"},
+            "home": {"dogsitter", "cat_nanny", "small_pet_nanny", "walk"},
         }
         ordered = [item for item in ordered if item.id in categories.get(service_category, set())]
     if pet_kinds and not pet_kinds & {PetKind.DOG, PetKind.CAT}:
         # Грызуны/птицы/хорьки: в передержке только медуход; в разовых услугах отдельных позиций нет.
-        ordered = [item for item in ordered if item.id == "med_care"] if not service_only else []
+        ordered = [item for item in ordered if item.id == ("small_pet_nanny" if service_only and service_category == "home" else "med_care")] if not service_only or service_category == "home" else []
     return ordered
 
 
@@ -599,7 +599,7 @@ def _pet_kind_markup_for_category(category: str | None) -> ReplyKeyboardMarkup:
         return pet_kind_kb(dogs_only=True)
     if category in CAT_ONLY_SERVICE_CATEGORIES:
         return pet_kind_kb(cats_only=True)
-    if category in {"grooming", "home"}:
+    if category == "grooming":
         return pet_kind_kb(dogs_and_cats_only=True)
     return pet_kind_kb()
 
@@ -648,6 +648,11 @@ async def set_service_date(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     category = data.get("service_category")
     today = date.today()
+    if category == "home" and data.get("cal_pick_from") and (message.text or "").strip().casefold() == "один день":
+        start = date.fromisoformat(data["cal_pick_from"])
+        await state.update_data(date_from=start.isoformat(), date_to=(start + timedelta(days=1)).isoformat(), cal_pick_from=None)
+        await _ask_service_time(message, state)
+        return
     if category in MULTI_DAY_SERVICE_CATEGORIES:
         parsed = parse_dates(message.text or "")
         if parsed:
@@ -682,7 +687,7 @@ async def set_service_date(message: Message, state: FSMContext) -> None:
     if visit_date < today:
         await message.answer(f"Дата не может быть в прошлом (сегодня {today.strftime('%d.%m.%Y')}).")
         return
-    if category == "walk":
+    if category == "walk" or (category == "home" and data.get("cal_pick_from")):
         start = date.fromisoformat(data["cal_pick_from"]) if data.get("cal_pick_from") else visit_date
         if visit_date < start:
             await message.answer("Дата окончания не может быть раньше начала. Укажите полный период или дату не раньше начала.")
@@ -694,7 +699,7 @@ async def set_service_date(message: Message, state: FSMContext) -> None:
         await state.update_data(cal_pick_from=visit_date.isoformat())
         await message.answer(
             f"Начало: {visit_date.strftime('%d.%m.%Y')}. Теперь выберите дату окончания "
-            "или напишите полный период ДД.ММ.ГГГГ - ДД.ММ.ГГГГ.",
+            "текстом, полный период ДД.ММ.ГГГГ - ДД.ММ.ГГГГ либо «Один день».",
             reply_markup=_calendar_kb(pick_from=visit_date, year=visit_date.year, month=visit_date.month),
         )
         return
@@ -851,6 +856,11 @@ async def cal_text_hint(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.answer(_service_dates_prompt("walk"), reply_markup=ReplyKeyboardRemove())
         await callback.answer()
         return
+    if data.get("service_only") and data.get("service_category") == "home":
+        prompt = "Напишите дату окончания ДД.ММ.ГГГГ, полный период или «Один день»." if data.get("cal_pick_from") else _service_dates_prompt("home")
+        await callback.message.answer(prompt, reply_markup=ReplyKeyboardRemove())
+        await callback.answer()
+        return
     await callback.message.answer(
         "Напишите дату визита ДД.ММ.ГГГГ или даты проживания ДД.ММ.ГГГГ - ДД.ММ.ГГГГ.",
         parse_mode="HTML",
@@ -914,7 +924,7 @@ async def cal_day(callback: CallbackQuery, state: FSMContext) -> None:
                     return
                 await state.update_data(cal_pick_from=chosen.isoformat())
                 await callback.message.edit_text(
-                    f"Начало услуги: {chosen.strftime('%d.%m.%Y')}. Выберите дату окончания:",
+                    f"Начало услуги: {chosen.strftime('%d.%m.%Y')}. Выберите дату окончания. Для одного дня выберите ту же дату ещё раз:",
                     reply_markup=_calendar_kb(
                         pick_from=chosen, year=chosen.year, month=chosen.month
                     ),
@@ -922,12 +932,12 @@ async def cal_day(callback: CallbackQuery, state: FSMContext) -> None:
                 await callback.answer(f"С {chosen.strftime('%d.%m.%Y')}")
                 return
             date_from = date.fromisoformat(pick_raw)
-            if chosen <= date_from:
-                await callback.answer("Окончание должно быть позже начала", show_alert=True)
+            if chosen < date_from:
+                await callback.answer("Окончание не может быть раньше начала", show_alert=True)
                 return
             await state.update_data(
                 date_from=date_from.isoformat(),
-                date_to=chosen.isoformat(),
+                date_to=((chosen + timedelta(days=1)) if chosen == date_from else chosen).isoformat(),
                 cal_pick_from=None,
             )
             try:
@@ -1032,7 +1042,7 @@ async def set_pet_kind(message: Message, state: FSMContext) -> None:
             reply_markup=pet_kind_kb(cats_only=True),
         )
         return
-    if category in {"grooming", "home"} and kind not in {PetKind.DOG, PetKind.CAT}:
+    if category == "grooming" and kind not in {PetKind.DOG, PetKind.CAT}:
         await message.answer("Выберите вариант с клавиатуры.", reply_markup=markup)
         return
     await state.update_data(draft_kind=kind.value)
@@ -1688,15 +1698,27 @@ def _current_tariff_pets(data: dict) -> list[PetProfile]:
     return pets
 
 
-def _tariff_preview_units(catalog: Catalog, pets: list[PetProfile]) -> list:
-    # Orientation only: availability is checked after the tariff is selected.
+def _tariff_preview_units(catalog: Catalog, pets: list[PetProfile], assignments: list | None = None) -> list:
+    # Availability in the external calendar is checked after tariff selection.
+    used = {a["sheet_label"].strip().casefold() for a in assignments or [] if a.get("sheet_label")}
+    full = {a.id for a in catalog.active_accommodations()
+            if all(label.strip().casefold() in used for label in a.calendar_labels())}
     return [candidate.accommodation for candidate in PlacementService(catalog).suggest(
-        pets, for_owner=True, limit=len(catalog.accommodations)
+        pets, for_owner=True, limit=len(catalog.accommodations), occupied_unit_ids=full
     ).candidates]
 
 
-def _tariff_choice_labels(catalog: Catalog, pets: list[PetProfile]) -> list[str]:
-    return [tariff_label(t) for t in sorted({a.tariff_kind for a in _tariff_preview_units(catalog, pets)})]
+def _tariff_choice_labels(catalog: Catalog, pets: list[PetProfile], assignments: list | None = None) -> list[str]:
+    return [tariff_label(t) for t in sorted({a.tariff_kind for a in _tariff_preview_units(catalog, pets, assignments)})]
+
+
+def _price_scope(pets: list[PetProfile], data: dict) -> str:
+    names = ", ".join(p.name for p in pets)
+    scope = f"Цена за одного питомца: {names}." if len(pets) == 1 else f"Цена за группу из {len(pets)} питомцев вместе: {names}."
+    groups = data.get("placement_groups") or []
+    if len(groups) > 1:
+        scope += f" Группа {data.get('placement_group_index', 0) + 1} из {len(groups)}."
+    return scope
 
 
 async def _ask_tariff_choice(
@@ -1704,7 +1726,7 @@ async def _ask_tariff_choice(
 ) -> None:
     data = await state.get_data()
     pets = _current_tariff_pets(data)
-    labels = _tariff_choice_labels(catalog, pets)
+    labels = _tariff_choice_labels(catalog, pets, data.get("room_assignments"))
     await message.answer("Выбор тарифа для: " + ", ".join(p.name for p in pets))
     if len(pets) > 1:
         await message.answer(
@@ -1725,7 +1747,7 @@ async def _ask_tariff_choice(
     )
     shown = set()
     preview_units = sorted(
-        _tariff_preview_units(catalog, pets),
+        _tariff_preview_units(catalog, pets, data.get("room_assignments")),
         key=lambda unit: (unit.id == "house_second_floor", unit.id != "second_floor_formulas"),
     )
     for unit in preview_units:
@@ -1740,7 +1762,7 @@ async def _ask_tariff_choice(
             if not path:
                 continue
             try:
-                caption = f"{tariff_label(unit.tariff_kind)} — пример: {unit.name}"
+                caption = f"{tariff_label(unit.tariff_kind)} — пример: {unit.name}\n{_price_scope(pets, data)}"
                 if len(kinds) > 1:
                     caption += "\nСовместное размещение разных видов и совместимость подтверждает руководитель. Фото — пример типа помещения."
                 if data.get("date_from") and data.get("date_to"):
@@ -1787,7 +1809,7 @@ async def set_tariff_choice(
     text = (message.text or "").strip()
     data = await state.get_data()
     pets = _current_tariff_pets(data)
-    labels = _tariff_choice_labels(catalog, pets)
+    labels = _tariff_choice_labels(catalog, pets, data.get("room_assignments"))
     if text.casefold() == "вернуться назад":
         await state.update_data(tariff_choice=None)
         if len(data.get("pets") or []) > 1:
@@ -1954,7 +1976,7 @@ async def _run_placement(
         await message.answer(client_text, reply_markup=_feeding_keyboard(await state.get_data()))
         return
 
-    occupied_labels |= {item["sheet_label"].lower() for item in data.get("room_assignments") or []}
+    occupied_labels |= {item["sheet_label"].strip().lower() for item in data.get("room_assignments") or [] if item.get("sheet_label")}
     occupied = booking_service.occupied_catalog_ids_from_labels(occupied_labels)
 
     result = PlacementService(catalog).suggest(
@@ -1967,6 +1989,11 @@ async def _run_placement(
     )
 
     if not result.candidates:
+        if tariff_kind and PlacementService(catalog).suggest(pets, occupied_unit_ids=occupied, limit=1).candidates:
+            await state.update_data(tariff_choice=None)
+            await message.answer("В выбранном тарифе подходящее место уже занято или недоступно. Для этой группы есть другие варианты — выберите другой тариф.")
+            await _ask_tariff_choice(message, state, catalog, assets_dir)
+            return
         if len(pets) > 1:
             mixed = len({p.kind for p in pets}) > 1
             await state.set_state(BookingForm.placement_together)
@@ -2077,7 +2104,7 @@ async def _run_placement(
                 price_text = f"≈ {day_net} ₽/сут., предварительно за {nights} сут.: {format_money(net)}"
         else:
             price_text = "Стоимость подтвердит оператор после уточнения условий"
-        caption = f"{i}. {acc.name}\n{price_text}\nЗалог: {quote.deposit_rub} ₽"
+        caption = f"{i}. {acc.name}\n{_price_scope(pets, data)}\n{price_text}\nЗалог: {quote.deposit_rub} ₽"
         for line in quote.lines:
             if line.scope.value == "discount":
                 caption += f"\n{line.label}: {format_money(line.amount_rub)}"
