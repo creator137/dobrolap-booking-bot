@@ -1551,11 +1551,15 @@ async def add_another(
     await message.answer("Выберите кнопку.", reply_markup=add_pet_kb())
 
 
+def _tariff_preview_units(catalog: Catalog, pets: list[PetProfile]) -> list:
+    # Orientation only: availability is checked after the tariff is selected.
+    return [candidate.accommodation for candidate in PlacementService(catalog).suggest(
+        pets, for_owner=True, limit=len(catalog.accommodations)
+    ).candidates]
+
+
 def _tariff_choice_labels(catalog: Catalog, pets: list[PetProfile]) -> list[str]:
-    kinds = {pet.kind for pet in pets}
-    tariffs = sorted({a.tariff_kind for a in catalog.active_accommodations()
-                      if kinds and kinds.issubset(set(a.allowed_species))})
-    return [tariff_label(t) for t in tariffs]
+    return [tariff_label(t) for t in sorted({a.tariff_kind for a in _tariff_preview_units(catalog, pets)})]
 
 
 async def _ask_tariff_choice(
@@ -1583,7 +1587,7 @@ async def _ask_tariff_choice(
     )
     shown = set()
     preview_units = sorted(
-        catalog.active_accommodations(),
+        _tariff_preview_units(catalog, pets),
         key=lambda unit: (unit.id == "house_second_floor", unit.id != "second_floor_formulas"),
     )
     for unit in preview_units:
@@ -1599,6 +1603,8 @@ async def _ask_tariff_choice(
                 continue
             try:
                 caption = f"{tariff_label(unit.tariff_kind)} — пример: {unit.name}"
+                if len(kinds) > 1:
+                    caption += "\nСовместное размещение разных видов и совместимость подтверждает руководитель. Фото — пример типа помещения."
                 if data.get("date_from") and data.get("date_to"):
                     preview_quote = PricingService(catalog).quote(
                         pets=pets,

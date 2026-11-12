@@ -96,8 +96,8 @@ class Accommodation(BaseModel):
         """Only photos applicable to the offered species and exact calendar row."""
         paths = list(self.photo_paths_by_sheet_label.get(sheet_label, self.photo_paths))
         kinds = {pet.kind for pet in pets}
-        if len(kinds) == 1:
-            paths.extend(self.photo_paths_by_species.get(next(iter(kinds)), []))
+        for kind in sorted(kinds):
+            paths.extend(self.photo_paths_by_species.get(kind, []))
         return list(dict.fromkeys(paths))
 
 

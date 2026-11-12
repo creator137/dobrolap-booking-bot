@@ -15,11 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('kind', [PetKind.CAT, PetKind.DOG, PetKind.RAT])
 async def test_tariffs_match_species_and_preview(kind):
     catalog=load_catalog(ROOT/'config')
-    state=State(pets=[PetProfile(kind=kind,name='Test').model_dump(mode='json')])
+    state=State(pets=[PetProfile(kind=kind,name='Test',weight_kg=6).model_dump(mode='json')])
     msg=SimpleNamespace(answer=AsyncMock(),answer_photo=AsyncMock())
     await _ask_tariff_choice(msg,state,catalog,ROOT/'assets')
     labels={b.text for row in msg.answer.call_args.kwargs['reply_markup'].keyboard for b in row}
-    expected={tariff_label(a.tariff_kind) for a in catalog.active_accommodations() if kind in a.allowed_species}
+    expected={tariff_label(a.tariff_kind) for a in catalog.active_accommodations() if kind in a.allowed_species and a.tariff_kind != 'premium' and not (kind==PetKind.DOG and a.tariff_kind=='outdoor_comfort') and not (kind==PetKind.RAT and a.id!='small_animals_balcony')}
     assert labels==expected|{'Любой подходящий','Вернуться назад'}
     if kind==PetKind.CAT:
         assert not {tariff_label('outdoor'), 'Премиум (усиленный вольер XXL)'} & labels
