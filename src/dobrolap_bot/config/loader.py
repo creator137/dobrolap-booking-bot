@@ -80,6 +80,13 @@ def load_catalog(config_dir: Path) -> Catalog:
                 raise FileNotFoundError(f"Photo for {unit.id} is missing: {resolved}")
     daily_rates = [DailyRate.model_validate(x) for x in rates_raw.get("daily_rates", [])]
     services = [ServiceOffering.model_validate(x) for x in svc_raw.get("services", [])]
+    for service in services:
+        for photo in service.photo_paths:
+            path = Path(photo)
+            if not path.is_absolute():
+                path = config_dir.parent / path
+            if not path.is_file():
+                raise FileNotFoundError(f"Photo for service {service.id} is missing: {path}")
     price_rules = [PriceRule.model_validate(x) for x in rules_raw.get("price_rules", [])]
     deposit = rules_raw.get("deposit", {})
     season_periods = [

@@ -75,6 +75,7 @@ from dobrolap_bot.bot.presentation import (
 )
 from dobrolap_bot.bot.grooming import QUESTIONS as GROOMING_QUESTIONS
 from dobrolap_bot.bot.states import BookingForm
+from dobrolap_bot.config.settings import get_settings
 from dobrolap_bot.config.loader import Catalog
 from dobrolap_bot.domain.enums import CAGE_PET_KINDS, BookingStatus, FeedingOption, PetKind
 from dobrolap_bot.domain.models import BehaviorFlags, PetProfile
@@ -191,6 +192,10 @@ def _available_services(catalog: Catalog, pets: list[PetProfile], *, service_onl
                 "grooming_cat",
                 "bath_dry_cat",
                 "brushing_cat",
+                "trimming_dog",
+                "express_shedding_dog",
+                "model_haircut_dog",
+                "dematting_dog",
             },
             "taxi": {"zoo_taxi"},
             "walk": {"walk"},
@@ -2197,6 +2202,28 @@ async def set_feeding(message: Message, state: FSMContext, catalog: Catalog) -> 
     await _ask_services(message, state, catalog)
 
 
+async def _send_grooming_examples(message: Message, state: FSMContext, services: list) -> None:
+    data = await state.get_data()
+    if data.get("service_category") != "grooming" or data.get("grooming_gallery_shown"):
+        return
+    dog_examples = any(service.id == "trimming_dog" for service in services)
+    if not dog_examples:
+        return
+    assets_dir = get_settings().assets_dir
+    examples = [("assets/grooming/general-examples-dogs.png", "Примеры груминга собак: разные процедуры. Результат согласуем индивидуально.")]
+    examples.extend((path, service_option_label(service) + ". Пример работы; состав процедуры и итоговую цену подтвердит грумер.") for service in services for path in service.photo_paths)
+    for photo, caption in examples:
+        path = resolve_photo_path(photo, assets_dir)
+        if not path:
+            logger.warning("Grooming example photo missing: %s", photo)
+            continue
+        try:
+            await message.answer_photo(FSInputFile(path), caption=caption)
+        except Exception:
+            logger.exception("Could not send grooming example")
+    await state.update_data(grooming_gallery_shown=True)
+
+
 async def _ask_services(message: Message, state: FSMContext, catalog: Catalog) -> None:
     await state.set_state(BookingForm.services)
     await message.answer("Переходим к дополнительным услугам.", reply_markup=ReplyKeyboardRemove())
@@ -2237,6 +2264,7 @@ async def _ask_services(message: Message, state: FSMContext, catalog: Catalog) -
             reply_markup=promo_choice_kb(),
         )
         return
+    await _send_grooming_examples(message, state, available)
     await message.answer(
         "Выберите услуги (можно несколько). На кнопках — ориентировочная стоимость; "
         "точную цену подтвердит руководитель. "

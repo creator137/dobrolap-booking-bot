@@ -23,7 +23,7 @@ services:
     price_to_rub: 6000
     unit: once
     applies_to: [dog]
-    notes: "Линька +20%; колтуны отдельно от 300 ₽"
+    notes: "Линька +20%; разбор колтунов — отдельная услуга 200–1500 ₽"
 
   - id: grooming_cat
     name: "Груминг (кошки)"
@@ -105,3 +105,32 @@ services:
     price_to_rub: 250
     unit: per_day
     notes: "150 ₽/сутки — готовый вариант с минимальной нарезкой; 250 ₽/сутки — если готовить кашу. Продукты приносит владелец либо покупает гостиница с чеками"
+
+  - id: trimming_dog
+    name: "Тримминг (собаки)"
+    price_from_rub: 3000
+    price_to_rub: 7000
+    applies_to: [dog]
+    photo_paths: [assets/grooming/trimming-dogs.png]
+    notes: "Пример работы; подходящую процедуру и окончательную цену подтвердит грумер."
+
+  - id: express_shedding_dog
+    name: "Экспресс-линька (собаки)"
+    price_from_rub: 3000
+    price_to_rub: 7000
+    applies_to: [dog]
+    photo_paths: [assets/grooming/express-shedding-dogs.png]
+    notes: "Пример ухода за густым подшёрстком; состав процедуры и цену подтвердит грумер."
+
+  - id: model_haircut_dog
+    name: "Модельная стрижка (собаки)"
+    price_from_rub: 4500
+    applies_to: [dog]
+    photo_paths: [assets/grooming/model-haircut-dog.png]
+    notes: "Пример стрижки; результат и окончательную цену согласуют с грумером."
+
+  - id: dematting_dog
+    name: "Разбор колтунов (собаки)"
+    price_from_rub: 200
+    price_to_rub: 1500
+    applies_to: [dog]

@@ -132,6 +132,7 @@ class DailyRate(BaseModel):
 
 
 class ServiceOffering(BaseModel):
+    photo_paths: list[str] = Field(default_factory=list)
     id: str
     name: str
     price_from_rub: int | None = None
