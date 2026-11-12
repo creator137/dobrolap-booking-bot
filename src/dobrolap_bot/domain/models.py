@@ -49,6 +49,8 @@ class PetProfile(BaseModel):
     behavior_notes: str | None = None
     health_notes: str | None = None
     passport_file_ids: list[str] = Field(default_factory=list)
+    grooming_answers: dict[str, str | bool] = Field(default_factory=dict)
+    grooming_reference_file_id: str | None = None
 
     @property
     def dog_size(self) -> DogSizeClass | None:

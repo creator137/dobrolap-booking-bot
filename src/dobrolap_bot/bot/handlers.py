@@ -73,6 +73,7 @@ from dobrolap_bot.bot.presentation import (
     tariff_label,
     service_option_label,
 )
+from dobrolap_bot.bot.grooming import QUESTIONS as GROOMING_QUESTIONS
 from dobrolap_bot.bot.states import BookingForm
 from dobrolap_bot.config.loader import Catalog
 from dobrolap_bot.domain.enums import CAGE_PET_KINDS, BookingStatus, FeedingOption, PetKind
@@ -1076,6 +1077,8 @@ async def _store_current_pet(
         behavior_notes=data.get("draft_behavior_raw"),
         health_notes=data.get("draft_health"),
         passport_file_ids=list(passport_ids or []),
+        grooming_answers=data.get("draft_grooming_answers") or {},
+        grooming_reference_file_id=data.get("draft_grooming_reference"),
     )
     pets = list(data.get("pets") or [])
     pets.append(pet.model_dump(mode="json"))
@@ -1095,6 +1098,9 @@ async def _store_current_pet(
         draft_behavior_raw=None,
         draft_health=None,
         draft_passport_ids=[],
+        draft_grooming_answers={},
+        draft_grooming_reference=None,
+        grooming_index=0,
     )
     await state.set_state(BookingForm.add_another_pet)
     young = " (щенок/котёнок)" if pet.is_puppy_or_kitten else ""
@@ -1123,6 +1129,9 @@ async def set_pet_breed(message: Message, state: FSMContext) -> None:
         return
     breed = None if text.lower() in {"нет", "-", "метьс", "метис", "не знаю"} else text
     await state.update_data(draft_breed=breed)
+    if data.get("service_only") and data.get("service_category") == "grooming":
+        await _ask_pet_age(message, state)
+        return
     await state.set_state(BookingForm.pet_sex)
     await message.answer(
         "Пол питомца?",
@@ -1249,8 +1258,78 @@ async def set_pet_weight(message: Message, state: FSMContext) -> None:
         await message.answer("Введите вес числом, например 8.5")
         return
     await state.update_data(draft_weight=weight)
+    data = await state.get_data()
+    if data.get("service_only") and data.get("service_category") == "grooming":
+        await state.update_data(grooming_index=0, draft_grooming_answers={}, draft_grooming_reference=None)
+        await _ask_grooming_question(message, state)
+        return
     await state.set_state(BookingForm.pet_vaccinated)
     await message.answer("Есть действующая вакцинация?", reply_markup=yes_no_kb())
+
+
+def _summary_parts(text: str) -> list[str]:
+    # 1900 characters fit Telegram's UTF-16 limit even for all-emoji answers.
+    parts = []
+    while len(text.encode("utf-16-le")) // 2 > 3900:
+        cut = text.rfind("\n", 0, 1900)
+        if cut < 1:
+            cut = 1900
+        parts.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+    if text:
+        parts.append(text)
+    return parts
+
+
+async def _ask_grooming_question(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    index = data.get("grooming_index", 0)
+    if index >= len(GROOMING_QUESTIONS):
+        await _store_current_pet(message, state)
+        return
+    _, _, question, choices = GROOMING_QUESTIONS[index]
+    await state.set_state(BookingForm.grooming_question)
+    keyboard = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=choice)] for choice in choices], resize_keyboard=True) if choices else ReplyKeyboardRemove()
+    await message.answer(f"Анкета груминга ({index + 1}/{len(GROOMING_QUESTIONS)}). {question}", reply_markup=keyboard)
+
+
+@router.message(BookingForm.grooming_question, F.photo)
+async def grooming_reference(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if GROOMING_QUESTIONS[data.get("grooming_index", 0)][0] != "result":
+        await message.answer("Фото-референс можно приложить на шаге желаемого результата. Сейчас ответьте на вопрос текстом.")
+        return
+    await state.update_data(draft_grooming_reference=message.photo[-1].file_id)
+    await message.answer("Фото-референс сохранено. Напишите пожелания к результату или «Далее». Если пришлёте другое фото, сохраню последнее.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Далее")]], resize_keyboard=True))
+
+
+@router.message(BookingForm.grooming_question)
+async def set_grooming_answer(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    index = data.get("grooming_index", 0)
+    key = GROOMING_QUESTIONS[index][0]
+    answer = (message.text or "").strip()
+    if not answer or len(answer) > 700:
+        await message.answer("Ответьте текстом до 700 символов. Для референса на шаге результата можно отправить фото.")
+        return
+    value = answer
+    if key == "media_consent":
+        value = parse_yes(answer)
+        if value is None:
+            await message.answer("Нужно явное согласие: «Да» или «Нет».")
+            return
+    elif key in {"allergies", "conditions", "sensitive_zones"} and answer.casefold() == "да":
+        await message.answer("Уточните, пожалуйста, какие именно особенности нужно учесть.")
+        return
+    elif key == "result" and answer.casefold() == "далее":
+        if not data.get("draft_grooming_reference"):
+            await message.answer("Опишите желаемый результат или выберите «Обсудить с грумером».")
+            return
+        value = "По фото-референсу"
+    answers = dict(data.get("draft_grooming_answers") or {})
+    answers[key] = value
+    await state.update_data(draft_grooming_answers=answers, grooming_index=index + 1)
+    await _ask_grooming_question(message, state)
 
 
 @router.message(BookingForm.pet_vaccinated)
@@ -2409,10 +2488,9 @@ async def _show_summary_message(message: Message, state: FSMContext, catalog: Ca
 
     await state.set_state(BookingForm.confirm_submit)
     refreshed = await state.get_data()
-    await message.answer(
-        format_draft_summary(data=refreshed, pets=pets, catalog=catalog, quote=quote),
-        reply_markup=submit_kb(),
-    )
+    parts = _summary_parts(format_draft_summary(data=refreshed, pets=pets, catalog=catalog, quote=quote))
+    for index, part in enumerate(parts):
+        await message.answer(part, reply_markup=submit_kb() if index == len(parts) - 1 else None)
 
 
 @router.callback_query(BookingForm.confirm_submit, F.data == "submit:yes")
@@ -2501,16 +2579,18 @@ async def submit_yes(
 
     summary = format_owner_summary(booking, catalog)
     if owner_chat_id and callback.bot:
-        await callback.bot.send_message(
-            owner_chat_id,
-            summary,
-            reply_markup=owner_actions_kb(
-                booking.id,
-                has_unit=bool(booking.unit_id),
-                service_only=bool(booking.payload.get("service_only")),
-            ),
-        )
+        parts = _summary_parts(summary)
+        for index, part in enumerate(parts):
+            await callback.bot.send_message(
+                owner_chat_id, part,
+                reply_markup=owner_actions_kb(booking.id, has_unit=bool(booking.unit_id), service_only=bool(booking.payload.get("service_only"))) if index == len(parts) - 1 else None,
+            )
         for pet in pets:
+            if pet.grooming_reference_file_id:
+                try:
+                    await callback.bot.send_photo(owner_chat_id, pet.grooming_reference_file_id, caption=f"Референс груминга: {pet.name} / заявка {booking.id}")
+                except Exception:
+                    logger.exception("Could not forward grooming reference for booking %s", booking.id)
             ids = list(pet.passport_file_ids or [])
             if not ids:
                 continue

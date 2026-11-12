@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dobrolap_bot.bot.grooming import QUESTIONS as GROOMING_QUESTIONS
+
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -221,6 +223,16 @@ def _pet_lines(pet: PetProfile, *, prefix: str = "") -> list[str]:
             details.append(f"течка: {yes_no_unknown(pet.in_heat)}")
     if details:
         lines.append(f"{indent}  " + "; ".join(details))
+    if pet.grooming_answers:
+        lines.append(f"{indent}  Анкета груминга:")
+        for key, label, _, _ in GROOMING_QUESTIONS:
+            value = pet.grooming_answers.get(key)
+            if value is not None:
+                text = ("Да" if value else "Нет") if isinstance(value, bool) else value
+                lines.append(f"{indent}  {label}: {text}")
+        if pet.grooming_reference_file_id:
+            lines.append(f"{indent}  Фото-референс: приложено")
+        return lines
     if pet.kind in {PetKind.DOG, PetKind.CAT}:
         lines.append(
             f"{indent}  Вакцинация: {yes_no_unknown(pet.vaccinated)}; "

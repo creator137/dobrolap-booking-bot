@@ -23,6 +23,7 @@ class BookingForm(StatesGroup):
     pet_age = State()
     pet_age_review = State()
     pet_weight = State()
+    grooming_question = State()
     pet_vaccinated = State()
     pet_parasite = State()
     pet_behavior = State()
