@@ -30,3 +30,7 @@ secrets/
 **/*service-account*.json
 **/*credentials*.json
 .DS_Store
+
+# Per-bot production storage and owner binding
+data/production/
+data/owner_binding.json

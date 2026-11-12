@@ -7,6 +7,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher
 
 from dobrolap_bot.bot.audit import FlowAuditMiddleware
+from dobrolap_bot.bot.owner_binding import OwnerBindingMiddleware
 from dobrolap_bot.bot.handlers import router as client_router
 from dobrolap_bot.bot.owner import router as owner_router
 from dobrolap_bot.config.loader import load_catalog
@@ -50,6 +51,11 @@ async def run_bot() -> None:
 
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher(storage=fsm_storage)
+    owner_binding = OwnerBindingMiddleware(
+        bot_id=bot.id, path=db_path.with_name("owner_binding.json"),
+        username=settings.owner_bootstrap_username, owner_id=settings.owner_chat_id,
+    )
+    dp.update.middleware(owner_binding)
     dp.update.middleware(FlowAuditMiddleware())
     assets_dir = settings.assets_dir
     if not assets_dir.is_absolute():
@@ -57,7 +63,7 @@ async def run_bot() -> None:
 
     dp["catalog"] = catalog
     dp["sheets"] = sheets
-    dp["owner_chat_id"] = settings.owner_chat_id
+    dp["owner_chat_id"] = owner_binding.owner_id
     dp["payment_instructions"] = settings.payment_instructions
     dp["booking_service"] = booking_service
     dp["assets_dir"] = assets_dir
@@ -73,7 +79,8 @@ async def run_bot() -> None:
         run_hold_watcher(
             bot=bot,
             booking_service=booking_service,
-            owner_chat_id=settings.owner_chat_id,
+            owner_chat_id=owner_binding.owner_id,
+            owner_chat_id_provider=lambda: owner_binding.owner_id,
             interval_sec=settings.hold_watch_interval_sec,
             reminder_hours_before=settings.hold_reminder_hours_before,
         ),

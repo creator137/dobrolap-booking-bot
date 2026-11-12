@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import logging
 from datetime import timedelta, timezone
 from datetime import datetime
@@ -27,6 +28,7 @@ async def run_hold_watcher(
     bot: Bot,
     booking_service: BookingService,
     owner_chat_id: int | None,
+    owner_chat_id_provider: Callable[[], int | None] | None = None,
     interval_sec: float = 60.0,
     reminder_hours_before: float = 4.0,
 ) -> None:
@@ -36,7 +38,7 @@ async def run_hold_watcher(
             await _tick(
                 bot=bot,
                 booking_service=booking_service,
-                owner_chat_id=owner_chat_id,
+                owner_chat_id=owner_chat_id_provider() if owner_chat_id_provider else owner_chat_id,
                 reminder_hours_before=reminder_hours_before,
             )
         except asyncio.CancelledError:

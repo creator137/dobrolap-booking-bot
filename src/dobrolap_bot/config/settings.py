@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     bot_token: str = ""
     owner_chat_id: int | None = None
+    owner_bootstrap_username: str = ""
 
     @field_validator("owner_chat_id", mode="before")
     @classmethod
