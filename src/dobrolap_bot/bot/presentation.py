@@ -323,6 +323,14 @@ def _trainer_program_text(data: dict) -> str | None:
     return f"Программа кинолога: {program}" if program else None
 
 
+def _service_time_text(data: dict) -> str:
+    details = data.get("service_details") or {}
+    schedule = data.get("walk_schedule") or details.get("walk_schedule")
+    if (data.get("service_category") or details.get("service_category")) == "walk" and schedule:
+        return f"Расписание выгула (пожелание, подтвердит оператор): {schedule}"
+    return f"Время визита: {data.get('arrival_time') or 'Не указано'}"
+
+
 def _service_visit_dates_text(data: dict) -> str:
     date_from = date.fromisoformat(data["date_from"])
     date_to = date.fromisoformat(data["date_to"])
@@ -396,7 +404,7 @@ def format_owner_summary(booking: BookingRecord, catalog: Catalog) -> str:
                 }
             )
         )
-        lines.append(f"Время визита: {booking.payload.get('arrival_time') or 'Не указано'}")
+        lines.append(_service_time_text(booking.payload))
         lines.append(f"Адрес: {booking.payload.get('service_address') or 'Не указан'}")
         lines.append(_service_location_text(booking.payload))
         program = _trainer_program_text(booking.payload)
@@ -482,7 +490,7 @@ def format_client_status(booking: BookingRecord, catalog: Catalog) -> str:
                 }
             )
         )
-        lines.append(f"Время визита: {booking.payload.get('arrival_time') or 'Не указано'}")
+        lines.append(_service_time_text(booking.payload))
         lines.append(f"Адрес: {booking.payload.get('service_address') or 'Не указан'}")
         lines.append(_service_location_text(booking.payload))
         program = _trainer_program_text(booking.payload)
@@ -525,7 +533,7 @@ def format_draft_summary(
     lines = ["Проверьте заявку", f"Телефон: {data.get('customer_contact') or 'Не указан'}"]
     if service_only:
         lines.append(_service_visit_dates_text(data))
-        lines.append(f"Время визита: {data.get('arrival_time') or 'Не указано'}")
+        lines.append(_service_time_text(data))
         lines.append(f"Адрес: {data.get('service_address') or 'Не указан'}")
         lines.append(_service_location_text(data))
         program = _trainer_program_text(data)

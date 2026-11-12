@@ -605,6 +605,8 @@ def _pet_kind_markup_for_category(category: str | None) -> ReplyKeyboardMarkup:
 
 
 def _service_dates_prompt(category: str | None) -> str:
+    if category == "walk":
+        return "На какие даты нужен выгул? Напишите один день ДД.ММ.ГГГГ или период ДД.ММ.ГГГГ - ДД.ММ.ГГГГ. Можно также выбрать начало и окончание в календаре."
     if category in MULTI_DAY_SERVICE_CATEGORIES:
         return (
             "Услуга может понадобиться на несколько дней. "
@@ -616,7 +618,11 @@ def _service_dates_prompt(category: str | None) -> str:
 
 async def _ask_service_time(message: Message, state: FSMContext) -> None:
     await state.set_state(BookingForm.service_time)
-    await message.answer("На какое время планируете услугу? Например: 14:00 или 14 00.")
+    data = await state.get_data()
+    if data.get("service_category") == "walk":
+        await message.answer("Когда нужен выгул? Напишите расписание текстом: «утром и вечером», «в обед», «в 8:00 и 20:00» или укажите разные часы по дням. Точное расписание подтвердит оператор.", reply_markup=ReplyKeyboardRemove())
+    else:
+        await message.answer("На какое время планируете услугу? Например: 14:00 или 14 00.")
 
 
 async def _ask_pet_after_service_time(message: Message, state: FSMContext) -> None:
@@ -676,6 +682,14 @@ async def set_service_date(message: Message, state: FSMContext) -> None:
     if visit_date < today:
         await message.answer(f"Дата не может быть в прошлом (сегодня {today.strftime('%d.%m.%Y')}).")
         return
+    if category == "walk":
+        start = date.fromisoformat(data["cal_pick_from"]) if data.get("cal_pick_from") else visit_date
+        if visit_date < start:
+            await message.answer("Дата окончания не может быть раньше начала. Укажите полный период или дату не раньше начала.")
+            return
+        await state.update_data(date_from=start.isoformat(), date_to=((start + timedelta(days=1)) if visit_date == start else visit_date).isoformat(), cal_pick_from=None)
+        await _ask_service_time(message, state)
+        return
     if category in MULTI_DAY_SERVICE_CATEGORIES:
         await state.update_data(cal_pick_from=visit_date.isoformat())
         await message.answer(
@@ -694,6 +708,16 @@ async def set_service_date(message: Message, state: FSMContext) -> None:
 
 @router.message(BookingForm.service_time)
 async def set_service_time(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("service_category") == "walk":
+        schedule = (message.text or "").strip()
+        if not schedule or len(schedule) > 700:
+            await message.answer("Напишите расписание текстом до 700 символов, например «утром и вечером».")
+            return
+        exact_time = parse_time(schedule)
+        await state.update_data(walk_schedule=schedule, arrival_time=exact_time.strftime("%H:%M") if exact_time else None)
+        await _ask_pet_after_service_time(message, state)
+        return
     visit_time = parse_time(message.text or "")
     if visit_time is None:
         await message.answer("Не разобрал время. Формат ЧЧ:ММ, например 14:00.")
@@ -798,7 +822,7 @@ async def set_trainer_program(message: Message, state: FSMContext, catalog: Cata
 
 async def _start_visit(message: Message, state: FSMContext, catalog: Catalog) -> None:
     data = await state.get_data()
-    if data.get("date_from") and data.get("arrival_time"):
+    if data.get("date_from") and (data.get("arrival_time") or (data.get("service_category") == "walk" and data.get("walk_schedule"))):
         if data.get("pets"):
             await _ask_services(message, state, catalog)
         else:
@@ -820,7 +844,13 @@ async def cal_noop(callback: CallbackQuery) -> None:
 
 @router.callback_query(BookingForm.service_date, F.data == "cal:text")
 @router.callback_query(BookingForm.dates, F.data == "cal:text")
-async def cal_text_hint(callback: CallbackQuery) -> None:
+async def cal_text_hint(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("service_only") and data.get("service_category") == "walk":
+        await state.update_data(cal_pick_from=None)
+        await callback.message.answer(_service_dates_prompt("walk"), reply_markup=ReplyKeyboardRemove())
+        await callback.answer()
+        return
     await callback.message.answer(
         "Напишите дату визита ДД.ММ.ГГГГ или даты проживания ДД.ММ.ГГГГ - ДД.ММ.ГГГГ.",
         parse_mode="HTML",
@@ -1170,7 +1200,7 @@ async def set_pet_neutered(message: Message, state: FSMContext) -> None:
     if data.get("draft_sex") == "женский" and value is False:
         await state.set_state(BookingForm.pet_heat)
         await message.answer(
-            "Есть ли сейчас течка или ожидается во время размещения?",
+            "Есть ли сейчас течка или ожидается в период оказания услуги?" if data.get("service_only") else "Есть ли сейчас течка или ожидается во время размещения?",
             reply_markup=yes_no_kb(),
         )
         return
@@ -1190,7 +1220,7 @@ async def set_pet_heat(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(draft_heat=value)
     if value:
-        await message.answer("При течке предлагаем только отдельную комнату.")
+        await message.answer("Сообщу оператору о течке — условия услуги согласуем индивидуально." if data.get("service_only") else "При течке предлагаем только отдельную комнату.")
     await _ask_pet_age(message, state)
 
 
@@ -2560,6 +2590,7 @@ async def submit_yes(
                     "service_location": data.get("service_location"),
                     "service_category": data.get("service_category"),
                     "trainer_program": data.get("trainer_program"),
+                    "walk_schedule": data.get("walk_schedule") if data.get("service_category") == "walk" else None,
                     "trainer_program_label": TRAINER_PROGRAM_LABELS.get(
                         data.get("trainer_program") or ""
                     ),
