@@ -1551,17 +1551,19 @@ async def add_another(
     await message.answer("Выберите кнопку.", reply_markup=add_pet_kb())
 
 
-def _tariff_choice_labels(catalog: Catalog) -> list[str]:
-    tariffs = sorted({a.tariff_kind for a in catalog.active_accommodations()})
+def _tariff_choice_labels(catalog: Catalog, pets: list[PetProfile]) -> list[str]:
+    kinds = {pet.kind for pet in pets}
+    tariffs = sorted({a.tariff_kind for a in catalog.active_accommodations()
+                      if kinds and kinds.issubset(set(a.allowed_species))})
     return [tariff_label(t) for t in tariffs]
 
 
 async def _ask_tariff_choice(
     message: Message, state: FSMContext, catalog: Catalog, assets_dir: Path
 ) -> None:
-    labels = _tariff_choice_labels(catalog)
     data = await state.get_data()
     pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    labels = _tariff_choice_labels(catalog, pets)
     if len(pets) > 1:
         await message.answer(
             "Если питомцы живут вместе в одном помещении — скидка 50% на второго и каждого "
@@ -1639,14 +1641,24 @@ async def set_tariff_choice(
     assets_dir: Path,
 ) -> None:
     text = (message.text or "").strip()
-    label_to_tariff = {tariff_label(t): t for t in {a.tariff_kind for a in catalog.active_accommodations()}}
+    data = await state.get_data()
+    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    labels = _tariff_choice_labels(catalog, pets)
+    if text.casefold() == "вернуться назад":
+        await state.update_data(tariff_choice=None)
+        await state.set_state(BookingForm.add_another_pet)
+        await message.answer("Вернулись к списку питомцев. Анкета и даты сохранены. Можно добавить ещё питомца или снова перейти к подбору.", reply_markup=add_pet_kb())
+        return
+    label_to_tariff = {tariff_label(a.tariff_kind): a.tariff_kind
+                      for a in catalog.active_accommodations()
+                      if tariff_label(a.tariff_kind) in labels}
     if text == "Любой подходящий":
         tariff_kind = None
     elif text in label_to_tariff:
         tariff_kind = label_to_tariff[text]
     else:
         await message.answer(
-            "Выберите тариф кнопкой.", reply_markup=tariff_choice_kb(_tariff_choice_labels(catalog))
+            "Выберите тариф кнопкой.", reply_markup=tariff_choice_kb(labels)
         )
         return
     await state.update_data(tariff_choice=tariff_kind)

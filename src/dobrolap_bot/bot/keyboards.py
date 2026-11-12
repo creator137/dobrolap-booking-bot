@@ -182,6 +182,7 @@ def trainer_program_kb() -> ReplyKeyboardMarkup:
 def tariff_choice_kb(labels: list[str]) -> ReplyKeyboardMarkup:
     rows = [[KeyboardButton(text=label)] for label in labels]
     rows.append([KeyboardButton(text="Любой подходящий")])
+    rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
