@@ -105,7 +105,8 @@ async def test_discount_prices_and_photos_precede_tariff_question():
     msg.answer.side_effect = lambda text, **kwargs: events.append(("text", text))
     msg.answer_photo.side_effect = lambda photo, **kwargs: events.append(("photo", kwargs["caption"]))
     await _ask_tariff_choice(msg, state, catalog, ROOT / "assets")
-    assert "50%" in events[0][1]
+    assert "Выбор тарифа для:" in events[0][1]
+    assert any("50%" in text for kind, text in events if kind == "text")
     assert any(kind == "photo" and "Прайс" in text for kind, text in events[:-1])
     assert any(kind == "photo" and "пример:" in text for kind, text in events[:-1])
     assert any(kind == "photo" and "По текущему тарифу:" in text and "₽" in text for kind, text in events[:-1])

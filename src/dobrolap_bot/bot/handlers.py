@@ -1546,9 +1546,32 @@ async def add_another(
             placement_group_index=0,
             together_unavailable=False,
         )
-        await _ask_tariff_choice(message, state, catalog, assets_dir)
+        if len(data.get("pets") or []) > 1:
+            await _ask_placement_mode(message, state)
+        else:
+            await state.update_data(placement_groups=[[0]], placement_together=True)
+            await _ask_tariff_choice(message, state, catalog, assets_dir)
         return
     await message.answer("Выберите кнопку.", reply_markup=add_pet_kb())
+
+
+async def _ask_placement_mode(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    await state.set_state(BookingForm.placement_together)
+    if pets and all(p.kind in CAGE_PET_KINDS for p in pets):
+        prompt = "Питомцев несколько — в одной клетке или в разных? Вместе: +100 ₽/сутки на каждого следующего; раздельно: скидка 50% на второго и следующих."
+    else:
+        prompt = "Как разместить питомцев — вместе или раздельно? Вместе: скидка 50% на второго и следующих; раздельно: скидка 30% на второго и следующих. Совместимость и окончательную стоимость подтвердит руководитель."
+    await message.answer(prompt, reply_markup=placement_together_kb(partial=len(pets) > 2))
+
+
+def _current_tariff_pets(data: dict) -> list[PetProfile]:
+    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    groups = data.get("placement_groups")
+    if groups:
+        pets = [pets[i] for i in groups[data.get("placement_group_index", 0)]]
+    return pets
 
 
 def _tariff_preview_units(catalog: Catalog, pets: list[PetProfile]) -> list:
@@ -1566,8 +1589,9 @@ async def _ask_tariff_choice(
     message: Message, state: FSMContext, catalog: Catalog, assets_dir: Path
 ) -> None:
     data = await state.get_data()
-    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    pets = _current_tariff_pets(data)
     labels = _tariff_choice_labels(catalog, pets)
+    await message.answer("Выбор тарифа для: " + ", ".join(p.name for p in pets))
     if len(pets) > 1:
         await message.answer(
             "Если питомцы живут вместе в одном помещении — скидка 50% на второго и каждого "
@@ -1648,12 +1672,15 @@ async def set_tariff_choice(
 ) -> None:
     text = (message.text or "").strip()
     data = await state.get_data()
-    pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
+    pets = _current_tariff_pets(data)
     labels = _tariff_choice_labels(catalog, pets)
     if text.casefold() == "вернуться назад":
         await state.update_data(tariff_choice=None)
-        await state.set_state(BookingForm.add_another_pet)
-        await message.answer("Вернулись к списку питомцев. Анкета и даты сохранены. Можно добавить ещё питомца или снова перейти к подбору.", reply_markup=add_pet_kb())
+        if len(data.get("pets") or []) > 1:
+            await _ask_placement_mode(message, state)
+        else:
+            await state.set_state(BookingForm.add_another_pet)
+            await message.answer("Вернулись к списку питомцев. Анкета и даты сохранены. Можно добавить ещё питомца или снова перейти к подбору.", reply_markup=add_pet_kb())
         return
     label_to_tariff = {tariff_label(a.tariff_kind): a.tariff_kind
                       for a in catalog.active_accommodations()
@@ -1669,26 +1696,6 @@ async def set_tariff_choice(
         return
     await state.update_data(tariff_choice=tariff_kind)
 
-    data = await state.get_data()
-    pets_count = len(data.get("pets") or [])
-    if pets_count > 1:
-        pets = [PetProfile.model_validate(p) for p in data.get("pets") or []]
-        await state.set_state(BookingForm.placement_together)
-        if pets and all(p.kind in CAGE_PET_KINDS for p in pets):
-            prompt = (
-                "Питомцев несколько — в одной клетке или в разных?\n"
-                "Вместе (одна клетка): +100 ₽/сутки на каждого следующего.\n"
-                "Раздельно (разные клетки): скидка 50% на второго и следующих."
-            )
-        else:
-            prompt = (
-                "Питомцев несколько — разместить их вместе в одном помещении или раздельно?\n"
-                "Вместе: скидка 50% на второго и каждого следующего питомца.\n"
-                "Раздельно: скидка 30% на второго и каждого следующего питомца, "
-                "помещения подбирает руководитель зоогостиницы."
-            )
-        await message.answer(prompt, reply_markup=placement_together_kb())
-        return
     await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
 
 
@@ -1754,6 +1761,7 @@ async def set_placement_together(
     )
     groups = [list(range(count))] if together else [[index] for index in range(count)]
     await state.update_data(
+        tariff_choice=None,
         placement_together=together,
         placement_flags=flags,
         placement_groups=groups,
@@ -1767,7 +1775,7 @@ async def set_placement_together(
             "Покажу ориентировочные варианты и цены со скидкой 50% на второго питомца; "
             "окончательную стоимость подтвердит руководитель."
         )
-    await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
+    await _ask_tariff_choice(message, state, catalog, assets_dir)
 
 
 @router.message(BookingForm.placement_groups)
@@ -1782,8 +1790,8 @@ async def set_placement_groups(message: Message, state: FSMContext, catalog: Cat
     except ValueError:
         await message.answer("Укажите каждого питомца ровно один раз, например: 1,2;3. Нужна хотя бы одна совместная группа и одна отдельная.")
         return
-    await state.update_data(placement_groups=groups, placement_together=False, placement_group_index=0, room_assignments=[])
-    await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
+    await state.update_data(placement_groups=groups, placement_together=False, placement_group_index=0, room_assignments=[], tariff_choice=None)
+    await _ask_tariff_choice(message, state, catalog, assets_dir)
 
 
 async def _run_placement(
@@ -2058,7 +2066,8 @@ async def _record_room(message: Message, state: FSMContext, catalog: Catalog, sh
         manual_matching=any_manual,
     )
     if index + 1 < len(groups):
-        await _run_placement(message, state, catalog, sheets, booking_service, assets_dir)
+        await state.update_data(tariff_choice=None)
+        await _ask_tariff_choice(message, state, catalog, assets_dir)
         return
     await state.set_state(BookingForm.feeding)
     await message.answer(
