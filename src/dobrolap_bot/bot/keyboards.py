@@ -121,8 +121,12 @@ def add_pet_kb() -> ReplyKeyboardMarkup:
 
 
 def placement_together_kb(*, partial: bool = False) -> ReplyKeyboardMarkup:
+    rows = [[KeyboardButton(text="Вместе"), KeyboardButton(text="Раздельно")]]
+    if partial:
+        rows.append([KeyboardButton(text="Частично")])
+    rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Вместе"), KeyboardButton(text="Раздельно")]] + ([[KeyboardButton(text="Частично")]] if partial else []),
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -158,6 +162,7 @@ def service_place_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Адрес зоогостиницы")],
             [KeyboardButton(text="Ваш адрес")],
+            [KeyboardButton(text="Вернуться назад")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -193,6 +198,7 @@ def feeding_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="Рацион гостиницы (платно, индивидуальный расчёт)")],
             [KeyboardButton(text="Натуральное — готовое, минимум нарезки (150 ₽/сутки)")],
             [KeyboardButton(text="Натуральное — приготовить кашу (250 ₽/сутки)")],
+            [KeyboardButton(text="Вернуться назад")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -227,6 +233,7 @@ def behavior_options(kind: PetKind) -> list[str]:
             "aggression",
             "high_stress",
             "loud_barking",
+            "marks_territory",
             "elderly",
             "mobility_limited",
             "incontinence",
@@ -273,6 +280,7 @@ def unit_choice_kb(unit_ids: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     rows.append(
         [InlineKeyboardButton(text="Нет подходящего — ручной подбор", callback_data="unit:manual")]
     )
+    rows.append([InlineKeyboardButton(text="« Вернуться назад", callback_data="unit:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

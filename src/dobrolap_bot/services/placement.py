@@ -17,6 +17,9 @@ DOG_ACCESS_FEATURES = frozenset({"ground_floor", "balcony", "workshop"})
 DOG_ACCESS_TAGS = frozenset(
     {"elderly", "incontinence", "treatment", "disability", "loud_barking", "separate_house", "vip"}
 )
+# Formulas room is unsuitable for dogs that mark or bark a lot; prefer balcony / house.
+MARKING_UNSAFE_UNITS = frozenset({"second_floor_formulas"})
+MARKING_PREFERRED_FEATURES = frozenset({"balcony", "house", "moisture_resistant", "no_furniture"})
 
 
 class PlacementService:
@@ -286,13 +289,27 @@ class PlacementService:
             if not (is_vip or features & DOG_PRIVATE_FEATURES or "separate_house" in tags):
                 return False
 
-        # Loud barking → separate house / house
+        # Loud barking → separate house / house / VIP without formulas room
         if b.loud_barking:
+            if unit.id in MARKING_UNSAFE_UNITS:
+                return False
             if not (
                 "separate_house" in tags
                 or "loud_barking" in tags
                 or "house" in features
+                or "balcony" in features
                 or is_vip
+            ):
+                return False
+
+        # Marking territory → balcony / house / furniture-safe; never formulas room
+        if b.marks_territory:
+            if unit.id in MARKING_UNSAFE_UNITS:
+                return False
+            if not (
+                features & MARKING_PREFERRED_FEATURES
+                or "separate_house" in tags
+                or tags & {"loud_barking", "treatment", "disability"}
             ):
                 return False
 
@@ -365,9 +382,18 @@ class PlacementService:
             if "treatment" in tags or "disability" in tags:
                 score += 30
                 reasons.append("priority:treatment_or_disability")
-        if b.loud_barking and ("loud_barking" in tags or "separate_house" in tags):
+        if b.loud_barking and ("loud_barking" in tags or "separate_house" in tags or "balcony" in set(unit.features)):
             score += 25
             reasons.append("priority:loud_barking_separate_house")
+
+        if b.marks_territory:
+            features = set(unit.features)
+            if "balcony" in features:
+                score += 35
+                reasons.append("priority:marks_territory_balcony")
+            elif features & MARKING_PREFERRED_FEATURES or "separate_house" in tags:
+                score += 25
+                reasons.append("priority:marks_territory_safe_room")
 
         if pet.kind == PetKind.CAT and (
             pet.vaccinated is False or b.zoo_aggression or b.high_stress or b.distrust_humans

@@ -49,6 +49,7 @@ def build_calendar(
     today: date | None = None,
     pick_from: date | None = None,
     min_date: date | None = None,
+    allow_same_day: bool = False,
 ) -> InlineKeyboardMarkup:
     today = today or date.today()
     min_date = min_date or today
@@ -71,9 +72,13 @@ def build_calendar(
         if day.month != month:
             week.append(InlineKeyboardButton(text="·", callback_data="cal:noop"))
         else:
-            disabled = day < min_date or (pick_from is not None and day <= pick_from)
+            # Boarding checkout must be after check-in. Home/walk may end on the same day.
+            if pick_from is not None and not allow_same_day:
+                disabled = day < min_date or day <= pick_from
+            else:
+                disabled = day < min_date
             if pick_from and day == pick_from:
-                # Keep check-in mark visible even though the day itself is not selectable.
+                # Mark the start day; keep it tappable when same-day end is allowed.
                 label = f"[{day.day}]"
             elif disabled:
                 # Telegram can't grey out text — hide numbers so they don't look tappable.

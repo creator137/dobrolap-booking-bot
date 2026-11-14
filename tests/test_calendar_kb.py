@@ -37,3 +37,18 @@ def test_checkout_calendar_requires_after_checkin():
     assert "cal:day:2026-10-10" not in flat
     assert "cal:day:2026-10-11" in flat
     assert "cal:reset" in flat
+
+
+def test_service_end_calendar_allows_same_day_when_enabled():
+    kb = build_calendar(
+        year=2026,
+        month=10,
+        today=date(2026, 10, 7),
+        pick_from=date(2026, 10, 10),
+        min_date=date(2026, 10, 10),
+        allow_same_day=True,
+    )
+    flat = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    assert "cal:day:2026-10-10" in flat
+    assert "cal:day:2026-10-11" in flat
+    assert "cal:day:2026-10-09" not in flat

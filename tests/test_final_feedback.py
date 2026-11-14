@@ -33,7 +33,7 @@ async def test_rodent_cannot_submit_old_food_button():
     msg = message('Натуральное — приготовить кашу (250 ₽/сутки)')
     await h.set_feeding(msg, state, load_catalog(ROOT / 'config'))
     assert 'feeding' not in state.data
-    assert [b.text for row in msg.answer.call_args.kwargs['reply_markup'].keyboard for b in row] == ['Свой корм']
+    assert [b.text for row in msg.answer.call_args.kwargs['reply_markup'].keyboard for b in row] == ['Свой корм', 'Вернуться назад']
 
 @pytest.mark.asyncio
 async def test_old_service_selection_is_removed():

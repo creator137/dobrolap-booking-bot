@@ -65,6 +65,7 @@ from dobrolap_bot.bot.keyboards import (
     yes_no_kb,
 )
 from dobrolap_bot.bot.presentation import (
+    MARKING_RELOCATION_NOTE,
     format_draft_summary,
     format_money,
     pet_kind_label,
@@ -276,7 +277,8 @@ def _feeding_keyboard(data: dict):
     own_only = any(p["kind"] not in {"dog", "cat"} for p in data.get("pets", []))
     keyboard = feeding_kb()
     if own_only:
-        keyboard.keyboard = keyboard.keyboard[:1]
+        # Keep «Свой корм» and «Вернуться назад».
+        keyboard.keyboard = [keyboard.keyboard[0], keyboard.keyboard[-1]]
     return keyboard
 
 
@@ -411,13 +413,65 @@ async def cmd_cancel_booking(
         )
 
 
-def _calendar_kb(*, pick_from: date | None = None, year: int | None = None, month: int | None = None):
+def _calendar_kb(
+    *,
+    pick_from: date | None = None,
+    year: int | None = None,
+    month: int | None = None,
+    allow_same_day: bool = False,
+):
     today = date.today()
     anchor = pick_from or today
     y = year or anchor.year
     m = month or anchor.month
-    min_date = (pick_from + timedelta(days=1)) if pick_from else today
-    return build_calendar(year=y, month=m, today=today, pick_from=pick_from, min_date=min_date)
+    if pick_from and allow_same_day:
+        min_date = pick_from
+    elif pick_from:
+        min_date = pick_from + timedelta(days=1)
+    else:
+        min_date = today
+    return build_calendar(
+        year=y,
+        month=m,
+        today=today,
+        pick_from=pick_from,
+        min_date=min_date,
+        allow_same_day=allow_same_day,
+    )
+
+
+def _service_end_calendar_kb(
+    *,
+    pick_from: date,
+    year: int | None = None,
+    month: int | None = None,
+):
+    """End-date calendar for home/walk: same day is a valid one-day booking."""
+    return _calendar_kb(
+        pick_from=pick_from,
+        year=year or pick_from.year,
+        month=month or pick_from.month,
+        allow_same_day=True,
+    )
+
+
+def _service_end_reply_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Один день")],
+            [KeyboardButton(text="Вернуться назад")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def _back_reply_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Вернуться назад")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
 
 
 async def _finish_dates(message: Message, state: FSMContext, date_from: date, date_to: date) -> None:
@@ -616,13 +670,34 @@ def _service_dates_prompt(category: str | None) -> str:
     return "Выберите дату визита в календаре или напишите ДД.ММ.ГГГГ."
 
 
+async def _confirm_service_period(message: Message, date_from: date, date_to: date) -> None:
+    end_display = date_from if date_to <= date_from + timedelta(days=1) else date_to
+    if end_display == date_from:
+        await message.answer(
+            f"Услуга на один день: {date_from.strftime('%d.%m.%Y')}.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:
+        await message.answer(
+            f"Период услуги: {date_from.strftime('%d.%m.%Y')} — {end_display.strftime('%d.%m.%Y')}.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+
 async def _ask_service_time(message: Message, state: FSMContext) -> None:
     await state.set_state(BookingForm.service_time)
     data = await state.get_data()
     if data.get("service_category") == "walk":
-        await message.answer("Когда нужен выгул? Напишите расписание текстом: «утром и вечером», «в обед», «в 8:00 и 20:00» или укажите разные часы по дням. Точное расписание подтвердит оператор.", reply_markup=ReplyKeyboardRemove())
+        await message.answer(
+            "Когда нужен выгул? Напишите расписание текстом: «утром и вечером», «в обед», "
+            "«в 8:00 и 20:00» или укажите разные часы по дням. Точное расписание подтвердит оператор.",
+            reply_markup=_back_reply_kb(),
+        )
     else:
-        await message.answer("На какое время планируете услугу? Например: 14:00 или 14 00.")
+        await message.answer(
+            "На какое время планируете услугу? Например: 14:00 или 14 00.",
+            reply_markup=_back_reply_kb(),
+        )
 
 
 async def _ask_pet_after_service_time(message: Message, state: FSMContext) -> None:
@@ -643,14 +718,44 @@ async def _continue_after_service_place(message: Message, state: FSMContext, cat
     await _start_visit(message, state, catalog)
 
 
+async def _restart_service_dates(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.set_state(BookingForm.service_date)
+    await state.update_data(cal_pick_from=None, date_from=None, date_to=None, arrival_time=None, walk_schedule=None)
+    await message.answer(
+        _service_dates_prompt(data.get("service_category")),
+        reply_markup=_calendar_kb(),
+    )
+
+
 @router.message(BookingForm.service_date)
 async def set_service_date(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     category = data.get("service_category")
     today = date.today()
-    if category == "home" and data.get("cal_pick_from") and (message.text or "").strip().casefold() == "один день":
+    text = (message.text or "").strip()
+    if text.casefold() == "вернуться назад":
+        if data.get("cal_pick_from"):
+            await _restart_service_dates(message, state)
+            return
+        if category in {"home", "walk", "taxi"}:
+            await state.set_state(BookingForm.service_address)
+            await state.update_data(service_address=None, cal_pick_from=None, date_from=None, date_to=None)
+            prompt = (
+                "Укажите адрес для выгула (точную стоимость подтвердит оператор):"
+                if category == "walk"
+                else "Укажите адрес для услуги (точную стоимость подтвердит оператор):"
+            )
+            await message.answer(prompt, reply_markup=_back_reply_kb())
+            return
+        await state.set_state(BookingForm.service_location)
+        await state.update_data(service_category=None, cal_pick_from=None, date_from=None, date_to=None)
+        await message.answer("Какая услуга нужна?", reply_markup=service_location_kb())
+        return
+    if category in MULTI_DAY_SERVICE_CATEGORIES and data.get("cal_pick_from") and text.casefold() == "один день":
         start = date.fromisoformat(data["cal_pick_from"])
         await state.update_data(date_from=start.isoformat(), date_to=(start + timedelta(days=1)).isoformat(), cal_pick_from=None)
+        await _confirm_service_period(message, start, start + timedelta(days=1))
         await _ask_service_time(message, state)
         return
     if category in MULTI_DAY_SERVICE_CATEGORIES:
@@ -662,62 +767,84 @@ async def set_service_date(message: Message, state: FSMContext) -> None:
                     f"Дата начала не может быть в прошлом (сегодня {today.strftime('%d.%m.%Y')})."
                 )
                 return
-            if date_to <= date_from:
-                await message.answer("Дата окончания должна быть позже даты начала.")
+            if date_to < date_from:
+                await message.answer("Дата окончания не может быть раньше даты начала.")
                 return
+            # Text range "ДД.ММ - ДД.ММ" uses inclusive end; store exclusive end like calendar same-day.
+            stored_to = date_to + timedelta(days=1) if date_to == date_from else date_to
             await state.update_data(
                 date_from=date_from.isoformat(),
-                date_to=date_to.isoformat(),
+                date_to=stored_to.isoformat(),
                 cal_pick_from=None,
             )
+            await _confirm_service_period(message, date_from, stored_to)
             await _ask_service_time(message, state)
             return
     visit_date = parse_single_date(message.text or "")
     if visit_date is None:
+        markup = _service_end_calendar_kb(pick_from=date.fromisoformat(data["cal_pick_from"])) if data.get("cal_pick_from") and category in MULTI_DAY_SERVICE_CATEGORIES else _calendar_kb()
         await message.answer(
             "Такой даты нет или формат неверный. "
             + (
-                "Напишите ДД.ММ.ГГГГ - ДД.ММ.ГГГГ или выберите в календаре."
+                "Напишите ДД.ММ.ГГГГ - ДД.ММ.ГГГГ, выберите в календаре или нажмите «Один день»."
                 if category in MULTI_DAY_SERVICE_CATEGORIES
-                else "В ноябре 30 дней. Выберите дату в календаре или напишите ДД.ММ.ГГГГ."
+                else "Выберите дату в календаре или напишите ДД.ММ.ГГГГ."
             ),
-            reply_markup=_calendar_kb(),
+            reply_markup=markup,
         )
         return
     if visit_date < today:
         await message.answer(f"Дата не может быть в прошлом (сегодня {today.strftime('%d.%m.%Y')}).")
         return
-    if category == "walk" or (category == "home" and data.get("cal_pick_from")):
-        start = date.fromisoformat(data["cal_pick_from"]) if data.get("cal_pick_from") else visit_date
+    if category in MULTI_DAY_SERVICE_CATEGORIES and data.get("cal_pick_from"):
+        start = date.fromisoformat(data["cal_pick_from"])
         if visit_date < start:
             await message.answer("Дата окончания не может быть раньше начала. Укажите полный период или дату не раньше начала.")
             return
-        await state.update_data(date_from=start.isoformat(), date_to=((start + timedelta(days=1)) if visit_date == start else visit_date).isoformat(), cal_pick_from=None)
+        date_to = (start + timedelta(days=1)) if visit_date == start else visit_date
+        await state.update_data(date_from=start.isoformat(), date_to=date_to.isoformat(), cal_pick_from=None)
+        await _confirm_service_period(message, start, date_to)
         await _ask_service_time(message, state)
         return
-    if category in MULTI_DAY_SERVICE_CATEGORIES:
+    if category == "walk":
+        # One day is enough for walk; a range can still be entered as "ДД.ММ - ДД.ММ".
+        date_to = visit_date + timedelta(days=1)
+        await state.update_data(date_from=visit_date.isoformat(), date_to=date_to.isoformat(), cal_pick_from=None)
+        await _confirm_service_period(message, visit_date, date_to)
+        await _ask_service_time(message, state)
+        return
+    if category == "home":
         await state.update_data(cal_pick_from=visit_date.isoformat())
         await message.answer(
             f"Начало: {visit_date.strftime('%d.%m.%Y')}. Теперь выберите дату окончания "
-            "текстом, полный период ДД.ММ.ГГГГ - ДД.ММ.ГГГГ либо «Один день».",
-            reply_markup=_calendar_kb(pick_from=visit_date, year=visit_date.year, month=visit_date.month),
+            "в календаре (для одного дня — ту же дату), напишите период ДД.ММ.ГГГГ - ДД.ММ.ГГГГ "
+            "либо нажмите «Один день».",
+            reply_markup=_service_end_calendar_kb(pick_from=visit_date),
         )
+        await message.answer("Можно также выбрать кнопкой:", reply_markup=_service_end_reply_kb())
         return
     await state.update_data(
         date_from=visit_date.isoformat(),
         date_to=(visit_date + timedelta(days=1)).isoformat(),
         cal_pick_from=None,
     )
+    await _confirm_service_period(message, visit_date, visit_date + timedelta(days=1))
     await _ask_service_time(message, state)
 
 
 @router.message(BookingForm.service_time)
 async def set_service_time(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    if (message.text or "").strip().casefold() == "вернуться назад":
+        await _restart_service_dates(message, state)
+        return
     if data.get("service_category") == "walk":
         schedule = (message.text or "").strip()
         if not schedule or len(schedule) > 700:
-            await message.answer("Напишите расписание текстом до 700 символов, например «утром и вечером».")
+            await message.answer(
+                "Напишите расписание текстом до 700 символов, например «утром и вечером».",
+                reply_markup=_back_reply_kb(),
+            )
             return
         exact_time = parse_time(schedule)
         await state.update_data(walk_schedule=schedule, arrival_time=exact_time.strftime("%H:%M") if exact_time else None)
@@ -725,7 +852,10 @@ async def set_service_time(message: Message, state: FSMContext) -> None:
         return
     visit_time = parse_time(message.text or "")
     if visit_time is None:
-        await message.answer("Не разобрал время. Формат ЧЧ:ММ, например 14:00.")
+        await message.answer(
+            "Не разобрал время. Формат ЧЧ:ММ, например 14:00.",
+            reply_markup=_back_reply_kb(),
+        )
         return
     await state.update_data(arrival_time=visit_time.strftime("%H:%M"))
     await _ask_pet_after_service_time(message, state)
@@ -778,7 +908,7 @@ async def set_service_location(message: Message, state: FSMContext, assets_dir: 
             if category == "walk"
             else "Укажите адрес для услуги (точную стоимость подтвердит оператор):"
         )
-        await message.answer(prompt, reply_markup=ReplyKeyboardRemove())
+        await message.answer(prompt, reply_markup=_back_reply_kb())
         return
     await _start_visit(message, state, catalog)
 
@@ -786,6 +916,11 @@ async def set_service_location(message: Message, state: FSMContext, assets_dir: 
 @router.message(BookingForm.service_place)
 async def set_service_place(message: Message, state: FSMContext, catalog: Catalog) -> None:
     text = (message.text or "").strip().lower()
+    if text == "вернуться назад":
+        await state.set_state(BookingForm.service_location)
+        await state.update_data(service_category=None, service_location=None, service_address=None)
+        await message.answer("Какая услуга нужна?", reply_markup=service_location_kb())
+        return
     if text in {"адрес зоогостиницы", "зоогостиница", "гостиница"}:
         await state.update_data(service_location="hotel", service_address=HOTEL_ADDRESS)
         await _continue_after_service_place(message, state, catalog)
@@ -795,7 +930,7 @@ async def set_service_place(message: Message, state: FSMContext, catalog: Catalo
         await state.set_state(BookingForm.service_address)
         await message.answer(
             "Укажите ваш адрес (точную стоимость подтвердит оператор):",
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=_back_reply_kb(),
         )
         return
     await message.answer(
@@ -806,9 +941,23 @@ async def set_service_place(message: Message, state: FSMContext, catalog: Catalo
 
 @router.message(BookingForm.service_address)
 async def set_service_address(message: Message, state: FSMContext, catalog: Catalog) -> None:
-    address = (message.text or "").strip()
+    text = (message.text or "").strip()
+    if text.casefold() == "вернуться назад":
+        data = await state.get_data()
+        if data.get("service_category") in PLACE_CHOICE_CATEGORIES:
+            await state.set_state(BookingForm.service_place)
+            await message.answer(
+                f"Где провести занятие? Адрес зоогостиницы ({HOTEL_ADDRESS}) или ваш.",
+                reply_markup=service_place_kb(),
+            )
+            return
+        await state.set_state(BookingForm.service_location)
+        await state.update_data(service_category=None, service_address=None)
+        await message.answer("Какая услуга нужна?", reply_markup=service_location_kb())
+        return
+    address = text
     if len(address) < 3:
-        await message.answer("Напишите адрес текстом.")
+        await message.answer("Напишите адрес текстом.", reply_markup=_back_reply_kb())
         return
     await state.update_data(service_address=address, service_location="home")
     await _continue_after_service_place(message, state, catalog)
@@ -853,12 +1002,17 @@ async def cal_text_hint(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     if data.get("service_only") and data.get("service_category") == "walk":
         await state.update_data(cal_pick_from=None)
-        await callback.message.answer(_service_dates_prompt("walk"), reply_markup=ReplyKeyboardRemove())
+        await callback.message.answer(_service_dates_prompt("walk"), reply_markup=_back_reply_kb())
         await callback.answer()
         return
     if data.get("service_only") and data.get("service_category") == "home":
-        prompt = "Напишите дату окончания ДД.ММ.ГГГГ, полный период или «Один день»." if data.get("cal_pick_from") else _service_dates_prompt("home")
-        await callback.message.answer(prompt, reply_markup=ReplyKeyboardRemove())
+        if data.get("cal_pick_from"):
+            await callback.message.answer(
+                "Напишите дату окончания ДД.ММ.ГГГГ, полный период или «Один день».",
+                reply_markup=_service_end_reply_kb(),
+            )
+        else:
+            await callback.message.answer(_service_dates_prompt("home"), reply_markup=_back_reply_kb())
         await callback.answer()
         return
     await callback.message.answer(
@@ -898,8 +1052,18 @@ async def cal_nav(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     pick_raw = data.get("cal_pick_from")
     pick_from = date.fromisoformat(pick_raw) if pick_raw else None
+    allow_same = bool(
+        pick_from
+        and data.get("service_only")
+        and data.get("service_category") in MULTI_DAY_SERVICE_CATEGORIES
+    )
     await callback.message.edit_reply_markup(
-        reply_markup=_calendar_kb(pick_from=pick_from, year=year, month=month)
+        reply_markup=_calendar_kb(
+            pick_from=pick_from,
+            year=year,
+            month=month,
+            allow_same_day=allow_same,
+        )
     )
     await callback.answer()
 
@@ -924,10 +1088,13 @@ async def cal_day(callback: CallbackQuery, state: FSMContext) -> None:
                     return
                 await state.update_data(cal_pick_from=chosen.isoformat())
                 await callback.message.edit_text(
-                    f"Начало услуги: {chosen.strftime('%d.%m.%Y')}. Выберите дату окончания. Для одного дня выберите ту же дату ещё раз:",
-                    reply_markup=_calendar_kb(
-                        pick_from=chosen, year=chosen.year, month=chosen.month
-                    ),
+                    f"Начало услуги: {chosen.strftime('%d.%m.%Y')}. Выберите дату окончания. "
+                    "Для одного дня выберите ту же дату ещё раз или нажмите «Один день»:",
+                    reply_markup=_service_end_calendar_kb(pick_from=chosen),
+                )
+                await callback.message.answer(
+                    "Если нужен только один день — кнопка ниже:",
+                    reply_markup=_service_end_reply_kb(),
                 )
                 await callback.answer(f"С {chosen.strftime('%d.%m.%Y')}")
                 return
@@ -935,9 +1102,10 @@ async def cal_day(callback: CallbackQuery, state: FSMContext) -> None:
             if chosen < date_from:
                 await callback.answer("Окончание не может быть раньше начала", show_alert=True)
                 return
+            date_to = (chosen + timedelta(days=1)) if chosen == date_from else chosen
             await state.update_data(
                 date_from=date_from.isoformat(),
-                date_to=((chosen + timedelta(days=1)) if chosen == date_from else chosen).isoformat(),
+                date_to=date_to.isoformat(),
                 cal_pick_from=None,
             )
             try:
@@ -945,6 +1113,7 @@ async def cal_day(callback: CallbackQuery, state: FSMContext) -> None:
             except Exception:
                 pass
             await callback.answer()
+            await _confirm_service_period(callback.message, date_from, date_to)
             await _ask_service_time(callback.message, state)
             return
         if chosen < today:
@@ -1698,14 +1867,21 @@ def _current_tariff_pets(data: dict) -> list[PetProfile]:
     return pets
 
 
+def _pets_need_marking_safe_room(pets: list[PetProfile]) -> bool:
+    return any(pet.behavior.marks_territory or pet.behavior.loud_barking for pet in pets)
+
+
 def _tariff_preview_units(catalog: Catalog, pets: list[PetProfile], assignments: list | None = None) -> list:
     # Availability in the external calendar is checked after tariff selection.
     used = {a["sheet_label"].strip().casefold() for a in assignments or [] if a.get("sheet_label")}
     full = {a.id for a in catalog.active_accommodations()
             if all(label.strip().casefold() in used for label in a.calendar_labels())}
-    return [candidate.accommodation for candidate in PlacementService(catalog).suggest(
+    units = [candidate.accommodation for candidate in PlacementService(catalog).suggest(
         pets, for_owner=True, limit=len(catalog.accommodations), occupied_unit_ids=full
     ).candidates]
+    if _pets_need_marking_safe_room(pets):
+        units = [unit for unit in units if unit.id != "second_floor_formulas"]
+    return units
 
 
 def _tariff_choice_labels(catalog: Catalog, pets: list[PetProfile], assignments: list | None = None) -> list[str]:
@@ -1746,9 +1922,13 @@ async def _ask_tariff_choice(
         reply_markup=ReplyKeyboardRemove(),
     )
     shown = set()
+    marking_safe = _pets_need_marking_safe_room(pets)
     preview_units = sorted(
         _tariff_preview_units(catalog, pets, data.get("room_assignments")),
-        key=lambda unit: (unit.id == "house_second_floor", unit.id != "second_floor_formulas"),
+        key=lambda unit: (
+            unit.id == "house_second_floor",
+            unit.id != "balcony" if marking_safe else unit.id != "second_floor_formulas",
+        ),
     )
     for unit in preview_units:
         if unit.tariff_kind in shown or not kinds.issubset(set(unit.allowed_species)):
@@ -1766,14 +1946,19 @@ async def _ask_tariff_choice(
                 if len(kinds) > 1:
                     caption += "\nСовместное размещение разных видов и совместимость подтверждает руководитель. Фото — пример типа помещения."
                 if data.get("date_from") and data.get("date_to"):
+                    date_from = date.fromisoformat(data["date_from"])
+                    date_to = date.fromisoformat(data["date_to"])
+                    nights = max((date_to - date_from).days, 1)
                     preview_quote = PricingService(catalog).quote(
                         pets=pets,
                         unit=unit,
-                        date_from=date.fromisoformat(data["date_from"]),
-                        date_to=date.fromisoformat(data["date_to"]),
+                        date_from=date_from,
+                        date_to=date_to,
                         feeding=FeedingOption.OWNER_FOOD,
                     )
                     if preview_quote.has_accommodation_amount:
+                        day_net = preview_quote.total_rub // nights
+                        caption += f"\n≈ {day_net} ₽/сут."
                         caption += (
                             f"\nПо текущему тарифу: предварительно {format_money(preview_quote.total_rub)} "
                             "за весь выбранный срок"
@@ -1782,6 +1967,8 @@ async def _ask_tariff_choice(
                         )
                     else:
                         caption += "\nСтоимость для вашего питомца уточнит руководитель."
+                if marking_safe and ("balcony" in set(unit.features) or unit.id == "balcony"):
+                    caption += f"\n{MARKING_RELOCATION_NOTE}"
                 await message.answer_photo(
                     FSInputFile(path), caption=caption
                 )
@@ -1847,6 +2034,21 @@ async def set_placement_together(
     text = (message.text or "").strip().lower()
     data = await state.get_data()
     count = len(data.get("pets") or [])
+    if text == "вернуться назад":
+        await state.update_data(
+            tariff_choice=None,
+            placement_groups=None,
+            placement_group_index=0,
+            room_assignments=[],
+            placement_together=None,
+            together_unavailable=False,
+        )
+        await state.set_state(BookingForm.add_another_pet)
+        await message.answer(
+            "Вернулись к списку питомцев. Анкета и даты сохранены. Можно добавить ещё питомца или снова перейти к подбору.",
+            reply_markup=add_pet_kb(),
+        )
+        return
     if text == "ручной подбор":
         await state.update_data(unit_id=None, room_assignments=[], manual_matching=True)
         await state.set_state(BookingForm.feeding)
@@ -2112,6 +2314,8 @@ async def _run_placement(
             caption += "\nПочему подходит: " + "; ".join(
                 placement_reason_label(reason) for reason in cand.reasons[:2]
             )
+        if any(pet.behavior.marks_territory for pet in pets):
+            caption += f"\n{MARKING_RELOCATION_NOTE}"
         if quote.provisional or cand.requires_owner_review:
             caption += "\n⚠️ требует подтверждения руководителем зоогостиницы"
         if acc.photo_paths_by_species and len(acc.calendar_labels()) > 1:
@@ -2220,7 +2424,14 @@ async def _record_room(message: Message, state: FSMContext, catalog: Catalog, sh
 @router.callback_query(BookingForm.choose_unit, F.data.startswith("unit:"))
 async def choose_unit(callback: CallbackQuery, state: FSMContext, catalog: Catalog, sheets: SheetsGateway, booking_service: BookingService, assets_dir: Path) -> None:
     unit_id = callback.data.split(":", 1)[1]
-    offered = (await state.get_data()).get("offered_sheet_labels") or {}
+    data = await state.get_data()
+    offered = data.get("offered_sheet_labels") or {}
+    if unit_id == "back":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer()
+        await state.update_data(tariff_choice=None, offered_sheet_labels={})
+        await _ask_tariff_choice(callback.message, state, catalog, assets_dir)
+        return
     if unit_id == "manual":
         await state.update_data(unit_id=None, requested_sheet_label=None, room_assignments=[], manual_matching=True)
     else:
@@ -2239,8 +2450,13 @@ async def choose_unit(callback: CallbackQuery, state: FSMContext, catalog: Catal
 
 @router.message(BookingForm.feeding)
 async def set_feeding(message: Message, state: FSMContext, catalog: Catalog) -> None:
-    feeding = FEED_MAP.get((message.text or "").strip().lower())
+    text = (message.text or "").strip()
     data = await state.get_data()
+    if text.casefold() == "вернуться назад":
+        await state.update_data(tariff_choice=None, room_assignments=[], offered_sheet_labels={})
+        await _ask_tariff_choice(message, state, catalog, get_settings().assets_dir)
+        return
+    feeding = FEED_MAP.get(text.lower())
     own_only = any(p["kind"] not in {"dog", "cat"} for p in data.get("pets", []))
     if own_only and feeding != FeedingOption.OWNER_FOOD:
         await message.answer("Для птиц и грызунов — только свой корм. Выберите «Свой корм».", reply_markup=_feeding_keyboard(data))
