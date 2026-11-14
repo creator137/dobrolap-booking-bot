@@ -105,4 +105,3 @@ daily_rates:
   - {accommodation_tariff: vip_plus, pet_kind: guinea_pig, price_rub: 650, price_rub_season: 750}
   - {accommodation_tariff: vip_plus, pet_kind: ferret, price_rub: 650, price_rub_season: 750}
   - {accommodation_tariff: vip_plus, pet_kind: bird, price_from_rub: 300, price_to_rub: 650, price_from_rub_season: 350, price_to_rub_season: 750}
-  - {accommodation_tariff: vip_plus, pet_kind: guinea_pig, price_rub: 650, price_rub_season: 750}

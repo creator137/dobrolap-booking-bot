@@ -44,6 +44,7 @@ PET_KIND_LABELS: dict[PetKind, str] = {
     PetKind.HAMSTER: "hamster (хомяк)",
     PetKind.BIRD: "bird (птица)",
     PetKind.GUINEA_PIG: "guinea_pig (морская свинка)",
+    PetKind.FERRET: "ferret (хорёк)",
     PetKind.OTHER: "other (другое)",
 }
 
@@ -72,6 +73,9 @@ _PET_KIND_ALIASES: dict[str, PetKind] = {
     "guinea_pig": PetKind.GUINEA_PIG,
     "морская свинка": PetKind.GUINEA_PIG,
     "свинка": PetKind.GUINEA_PIG,
+    "ferret": PetKind.FERRET,
+    "хорёк": PetKind.FERRET,
+    "хорек": PetKind.FERRET,
     "other": PetKind.OTHER,
     "другое": PetKind.OTHER,
     "прочие животные": PetKind.OTHER,
