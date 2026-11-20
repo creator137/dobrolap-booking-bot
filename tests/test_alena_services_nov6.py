@@ -52,8 +52,8 @@ def test_menu_has_zoopsych_and_trainer_programs():
 
 
 def test_walk_and_trainer_pet_kind_dogs_only():
-    assert [b.text for row in pet_kind_kb(dogs_only=True).keyboard for b in row] == ["Собака"]
-    assert [b.text for row in pet_kind_kb(cats_only=True).keyboard for b in row] == ["Кошка"]
+    assert [b.text for row in pet_kind_kb(dogs_only=True).keyboard for b in row] == ["Собака", "Вернуться назад"]
+    assert [b.text for row in pet_kind_kb(cats_only=True).keyboard for b in row] == ["Кошка", "Вернуться назад"]
 
 
 @pytest.mark.asyncio

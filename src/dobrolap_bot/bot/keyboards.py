@@ -4,18 +4,35 @@ from dobrolap_bot.bot.presentation import BEHAVIOR_LABELS
 from dobrolap_bot.domain.enums import BookingStatus, PetKind
 
 
-def yes_no_kb() -> ReplyKeyboardMarkup:
+def yes_no_kb(*, with_back: bool = True) -> ReplyKeyboardMarkup:
+    rows = [[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]]
+    if with_back:
+        rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]],
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )
 
 
-def no_kb() -> ReplyKeyboardMarkup:
+def no_kb(*, with_back: bool = True) -> ReplyKeyboardMarkup:
     """Optional free-text step: skip with «Нет» or type an answer."""
+    rows = [[KeyboardButton(text="Нет")]]
+    if with_back:
+        rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Нет")]],
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def sex_kb(*, with_back: bool = True) -> ReplyKeyboardMarkup:
+    rows = [[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]]
+    if with_back:
+        rows.append([KeyboardButton(text="Вернуться назад")])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -32,12 +49,15 @@ def contact_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def passport_kb() -> ReplyKeyboardMarkup:
+def passport_kb(*, with_back: bool = True) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="Готово")],
+        [KeyboardButton(text="Без фото")],
+    ]
+    if with_back:
+        rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Готово")],
-            [KeyboardButton(text="Без фото")],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -75,6 +95,7 @@ def pet_kind_kb(
     dogs_and_cats_only: bool = False,
     dogs_only: bool = False,
     cats_only: bool = False,
+    with_back: bool = True,
 ) -> ReplyKeyboardMarkup:
     if dogs_only:
         rows = [[KeyboardButton(text="Собака")]]
@@ -90,6 +111,8 @@ def pet_kind_kb(
             [KeyboardButton(text="Морская свинка"), KeyboardButton(text="Хорёк")],
             [KeyboardButton(text="Другое")],
         ]
+    if with_back:
+        rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
@@ -109,12 +132,15 @@ def promo_choice_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def add_pet_kb() -> ReplyKeyboardMarkup:
+def add_pet_kb(*, with_back: bool = True) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="Добавить ещё питомца")],
+        [KeyboardButton(text="Перейти к подбору")],
+    ]
+    if with_back:
+        rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Добавить ещё питомца")],
-            [KeyboardButton(text="Перейти к подбору")],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -132,25 +158,31 @@ def placement_together_kb(*, partial: bool = False) -> ReplyKeyboardMarkup:
     )
 
 
-def booking_kind_kb() -> ReplyKeyboardMarkup:
+def booking_kind_kb(*, with_back: bool = True) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="Передержка (размещение)")],
+        [KeyboardButton(text="Разовая услуга без размещения")],
+    ]
+    if with_back:
+        rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Передержка (размещение)")],
-            [KeyboardButton(text="Разовая услуга без размещения")],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )
 
 
-def service_location_kb() -> ReplyKeyboardMarkup:
+def service_location_kb(*, with_back: bool = True) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="Выезд на дом (зооняня)")],
+        [KeyboardButton(text="В зоогостиницу на груминг")],
+        [KeyboardButton(text="Зоотакси"), KeyboardButton(text="Выгул (собаки)")],
+        [KeyboardButton(text="Кинолог (собаки)"), KeyboardButton(text="Зоопсихолог (кошки)")],
+    ]
+    if with_back:
+        rows.append([KeyboardButton(text="Вернуться назад")])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Выезд на дом (зооняня)")],
-            [KeyboardButton(text="В зоогостиницу на груминг")],
-            [KeyboardButton(text="Зоотакси"), KeyboardButton(text="Выгул (собаки)")],
-            [KeyboardButton(text="Кинолог (собаки)"), KeyboardButton(text="Зоопсихолог (кошки)")],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )

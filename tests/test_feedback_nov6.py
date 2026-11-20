@@ -62,7 +62,7 @@ async def test_intact_female_asks_heat():
 
 def test_grooming_pet_kind_kb_only_dog_and_cat():
     labels = [btn.text for row in pet_kind_kb(dogs_and_cats_only=True).keyboard for btn in row]
-    assert labels == ["Собака", "Кошка"]
+    assert labels == ["Собака", "Кошка", "Вернуться назад"]
 
 
 def test_promo_choice_kb_has_review_option():

@@ -37,6 +37,11 @@ class State:
     async def set_state(self, state):
         self.current = state
 
+    async def get_state(self):
+        if self.current is None:
+            return None
+        return getattr(self.current, "state", str(self.current))
+
 
 def message(text):
     return SimpleNamespace(text=text, answer=AsyncMock(), answer_photo=AsyncMock())

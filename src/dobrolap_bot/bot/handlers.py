@@ -59,6 +59,7 @@ from dobrolap_bot.bot.keyboards import (
     services_kb,
     service_location_kb,
     service_place_kb,
+    sex_kb,
     trainer_program_kb,
     submit_kb,
     unit_choice_kb,
@@ -474,19 +475,365 @@ def _back_reply_kb() -> ReplyKeyboardMarkup:
     )
 
 
+def _is_back_text(text: str | None) -> bool:
+    return (text or "").strip().casefold() == "вернуться назад"
+
+
+async def _ask_booking_kind(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.booking_kind)
+    await message.answer(
+        "Что нужно оформить?",
+        reply_markup=booking_kind_kb(),
+    )
+
+
+async def _ask_boarding_dates(message: Message, state: FSMContext) -> None:
+    today = date.today()
+    await state.set_state(BookingForm.dates)
+    await state.update_data(cal_pick_from=None, date_from=None, date_to=None, arrival_time=None)
+    await message.answer(
+        dates_prompt(),
+        reply_markup=_calendar_kb(year=today.year, month=today.month),
+        parse_mode="HTML",
+    )
+    await message.answer("Чтобы исправить предыдущий шаг — «Вернуться назад».", reply_markup=_back_reply_kb())
+
+
+async def _ask_arrival_time_step(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    date_from = data.get("date_from")
+    date_to = data.get("date_to")
+    await state.set_state(BookingForm.arrival_time)
+    await state.update_data(arrival_time=None, arrival_price_notice=None)
+    prefix = ""
+    if date_from and date_to:
+        prefix = (
+            f"Даты: {date.fromisoformat(date_from).strftime('%d.%m.%Y')} → "
+            f"{date.fromisoformat(date_to).strftime('%d.%m.%Y')}\n"
+        )
+    await message.answer(
+        prefix
+        + "Во сколько планируете приехать? Выберите кнопку или введите время, например: 19:30.\n\n"
+        + ARRIVAL_RULES_TEXT,
+        reply_markup=arrival_time_kb(),
+    )
+    await message.answer("Чтобы исправить даты — «Вернуться назад».", reply_markup=_back_reply_kb())
+
+
+async def _ask_pet_kind_step(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    category = data.get("service_category") if data.get("service_only") else None
+    await state.set_state(BookingForm.pet_kind)
+    await message.answer("Кто ваш питомец?", reply_markup=_pet_kind_markup_for_category(category))
+
+
+async def _ask_pet_name_step(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    if data.get("service_only"):
+        note = ""
+    elif kind in CAGE_PET_KINDS:
+        note = (
+            " Для птиц, грызунов и хорьков нужна клетка. "
+            "В одной клетке — +100 ₽/сутки на каждого следующего; "
+            "в разных клетках — скидка 50% на второго и следующих."
+        )
+    elif kind == PetKind.DOG:
+        note = (
+            "\n\n‼️Для собак просим привезти: корм, амуницию, ветпаспорт, "
+            "(по желанию: средства гигиены, любимые игрушки....)"
+        )
+    elif kind == PetKind.CAT:
+        note = (
+            "\n\n‼️ Для кошек с собой просим привезти: ветпаспорт, привычный корм, "
+            "лоток с наполнителем, миски и любимые вещи питомца, по необходимости шампунь "
+            "или средство для медухода или витамины ( всё необходимое)"
+        )
+    else:
+        note = ""
+    await state.set_state(BookingForm.pet_name)
+    await message.answer("Кличка питомца?" + note, reply_markup=_back_reply_kb())
+
+
+async def _ask_pet_breed_step(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    await state.set_state(BookingForm.pet_breed)
+    if kind == PetKind.OTHER:
+        await message.answer(
+            "Напишите, кто это за питомец (например: хорёк, шиншилла, енот):",
+            reply_markup=_back_reply_kb(),
+        )
+        return
+    await message.answer(
+        "Какая порода? Если порода неизвестна или питомец — метис, нажмите «Нет».",
+        reply_markup=no_kb(),
+    )
+
+
+async def _ask_pet_sex_step(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.pet_sex)
+    await message.answer("Пол питомца?", reply_markup=sex_kb())
+
+
+async def _ask_pet_neutered_step(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.pet_neutered)
+    await message.answer("Питомец кастрирован / стерилизована?", reply_markup=yes_no_kb())
+
+
+async def _ask_pet_heat_step(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.set_state(BookingForm.pet_heat)
+    await message.answer(
+        "Есть ли сейчас течка или ожидается в период оказания услуги?"
+        if data.get("service_only")
+        else "Есть ли сейчас течка или ожидается во время размещения?",
+        reply_markup=yes_no_kb(),
+    )
+
+
+async def _ask_pet_weight_step(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.pet_weight)
+    await message.answer("Вес питомца в кг (число)?", reply_markup=_back_reply_kb())
+
+
+async def _ask_pet_vaccinated_step(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.pet_vaccinated)
+    await message.answer("Есть действующая вакцинация?", reply_markup=yes_no_kb())
+
+
+async def _ask_pet_parasite_step(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.pet_parasite)
+    await message.answer("Обработка от паразитов сделана?", reply_markup=yes_no_kb())
+
+
+async def _ask_pet_behavior_step(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    kind = PetKind(data["draft_kind"])
+    await state.set_state(BookingForm.pet_behavior)
+    await state.update_data(draft_behavior_selected=list(data.get("draft_behavior_selected") or []))
+    await message.answer(
+        "Расскажите обычным текстом об особенностях поведения и ухода — например, «боится людей, но не агрессивен». "
+        "Можно также выбрать несколько пунктов кнопками. Если особенностей нет, нажмите «Особенностей нет».",
+        reply_markup=behavior_kb(kind, set(data.get("draft_behavior_selected") or [])),
+    )
+    await message.answer("Чтобы исправить предыдущий шаг — «Вернуться назад».", reply_markup=_back_reply_kb())
+
+
+async def _ask_pet_health_step(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.pet_health)
+    await message.answer(
+        "Есть дополнительные сведения о здоровье, лекарствах или уходе?\n"
+        "Можно написать обычным текстом или нажать «Нет».",
+        reply_markup=no_kb(),
+    )
+
+
+async def _ask_pet_passport_step(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.pet_passport)
+    await message.answer(
+        "Пришлите фото страниц ветпаспорта:\n"
+        "• данные питомца и владельца;\n"
+        "• вакцинация, включая бешенство;\n"
+        "• обработки от паразитов.\n"
+        "Можно несколько фото. Когда закончите — «Готово».\n"
+        "Если фото нет — «Без фото» (заявка уйдёт руководителю зоогостиницы как неполная).",
+        reply_markup=passport_kb(),
+    )
+
+
+async def _ask_service_location_step(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookingForm.service_location)
+    await state.update_data(
+        service_category=None,
+        service_location=None,
+        service_address=None,
+        trainer_program=None,
+        cal_pick_from=None,
+        date_from=None,
+        date_to=None,
+        arrival_time=None,
+        walk_schedule=None,
+    )
+    await message.answer("Какая услуга нужна?", reply_markup=service_location_kb())
+
+
+async def _client_step_back(message: Message, state: FSMContext) -> bool:
+    """Go one questionnaire/booking step back. Returns True if handled."""
+    current = await state.get_state()
+    if not current:
+        return False
+    data = await state.get_data()
+    state_name = current.split(":")[-1] if ":" in current else current
+
+    if state_name == "booking_kind":
+        await state.set_state(BookingForm.contact)
+        await message.answer(
+            "Укажите телефон ещё раз или нажмите «Поделиться номером».",
+            reply_markup=contact_kb(),
+        )
+        return True
+
+    if state_name == "dates":
+        if data.get("cal_pick_from"):
+            await _ask_boarding_dates(message, state)
+            return True
+        await _ask_booking_kind(message, state)
+        return True
+
+    if state_name == "arrival_time":
+        await _ask_boarding_dates(message, state)
+        return True
+
+    if state_name == "service_location":
+        await _ask_booking_kind(message, state)
+        return True
+
+    if state_name == "pet_kind":
+        if data.get("pets"):
+            await state.set_state(BookingForm.add_another_pet)
+            await message.answer(
+                "Вернулись к списку питомцев. Анкета сохранена.",
+                reply_markup=add_pet_kb(),
+            )
+            return True
+        if data.get("service_only"):
+            if data.get("service_category") == "walk" and data.get("walk_schedule"):
+                await _ask_service_time(message, state)
+                return True
+            if data.get("arrival_time") or data.get("walk_schedule"):
+                await _restart_service_dates(message, state)
+                return True
+            if data.get("service_address") or data.get("service_location") == "hotel":
+                await _ask_service_location_step(message, state)
+                return True
+            await _ask_service_location_step(message, state)
+            return True
+        await _ask_arrival_time_step(message, state)
+        return True
+
+    if state_name == "pet_name":
+        await state.update_data(draft_name=None)
+        await _ask_pet_kind_step(message, state)
+        return True
+
+    if state_name == "pet_breed":
+        await state.update_data(draft_breed=None)
+        await _ask_pet_name_step(message, state)
+        return True
+
+    if state_name == "pet_sex":
+        await state.update_data(draft_sex=None)
+        await _ask_pet_breed_step(message, state)
+        return True
+
+    if state_name == "pet_neutered":
+        await state.update_data(draft_neutered=None, draft_heat=False)
+        await _ask_pet_sex_step(message, state)
+        return True
+
+    if state_name == "pet_heat":
+        await state.update_data(draft_heat=False)
+        await _ask_pet_neutered_step(message, state)
+        return True
+
+    if state_name in {"pet_age", "pet_age_review"}:
+        await state.update_data(draft_age_months=None, draft_age_candidate=None)
+        if data.get("service_only") and data.get("service_category") == "grooming":
+            await _ask_pet_breed_step(message, state)
+            return True
+        if data.get("draft_sex") == "женский" and data.get("draft_neutered") is False:
+            await _ask_pet_heat_step(message, state)
+            return True
+        if data.get("draft_sex"):
+            await _ask_pet_neutered_step(message, state)
+            return True
+        await _ask_pet_breed_step(message, state)
+        return True
+
+    if state_name == "pet_weight":
+        await state.update_data(draft_weight=None)
+        await _ask_pet_age(message, state)
+        return True
+
+    if state_name == "grooming_question":
+        index = int(data.get("grooming_index") or 0)
+        if index > 0:
+            answers = dict(data.get("draft_grooming_answers") or {})
+            prev_key = GROOMING_QUESTIONS[index - 1][0]
+            answers.pop(prev_key, None)
+            await state.update_data(grooming_index=index - 1, draft_grooming_answers=answers)
+            await _ask_grooming_question(message, state)
+            return True
+        await state.update_data(grooming_index=0, draft_grooming_answers={}, draft_grooming_reference=None)
+        await _ask_pet_weight_step(message, state)
+        return True
+
+    if state_name == "pet_vaccinated":
+        await state.update_data(draft_vaccinated=None)
+        if data.get("draft_kind") in {PetKind.DOG.value, PetKind.CAT.value}:
+            await _ask_pet_weight_step(message, state)
+        else:
+            await _ask_pet_age(message, state)
+        return True
+
+    if state_name == "pet_parasite":
+        await state.update_data(draft_parasite=None)
+        await _ask_pet_vaccinated_step(message, state)
+        return True
+
+    if state_name in {"pet_behavior", "pet_behavior_review"}:
+        await state.update_data(draft_behavior=None, draft_behavior_raw=None, draft_behavior_selected=[])
+        await _ask_pet_parasite_step(message, state)
+        return True
+
+    if state_name in {"pet_health", "pet_health_review"}:
+        await state.update_data(draft_health=None, draft_health_candidate=None, draft_health_flags_candidate=None)
+        await _ask_pet_behavior_step(message, state)
+        return True
+
+    if state_name == "pet_passport":
+        await state.update_data(draft_passport_ids=[])
+        await _ask_pet_health_step(message, state)
+        return True
+
+    if state_name == "add_another_pet":
+        pets = list(data.get("pets") or [])
+        if not pets:
+            await _ask_pet_kind_step(message, state)
+            return True
+        pets.pop()
+        await state.update_data(pets=pets)
+        await message.answer(
+            "Убрал последнего питомца из списка. Можно добавить заново или перейти к подбору."
+            if pets
+            else "Список питомцев пуст. Добавьте питомца заново.",
+            reply_markup=add_pet_kb() if pets else None,
+        )
+        if not pets:
+            await _ask_pet_kind_step(message, state)
+        else:
+            await state.set_state(BookingForm.add_another_pet)
+        return True
+
+    if state_name == "feeding_source":
+        await state.set_state(BookingForm.feeding)
+        await message.answer(
+            "Как будем кормить? Рацион гостиницы платный, стоимость рассчитывается индивидуально.",
+            reply_markup=_feeding_keyboard(await state.get_data()),
+        )
+        return True
+
+    return False
+
+
 async def _finish_dates(message: Message, state: FSMContext, date_from: date, date_to: date) -> None:
     await state.update_data(
         date_from=date_from.isoformat(),
         date_to=date_to.isoformat(),
         cal_pick_from=None,
     )
-    await state.set_state(BookingForm.arrival_time)
-    await message.answer(
-        f"Даты: {date_from.strftime('%d.%m.%Y')} → {date_to.strftime('%d.%m.%Y')}\n"
-        "Во сколько планируете приехать? Выберите кнопку или введите время, например: 19:30.\n\n"
-        + ARRIVAL_RULES_TEXT,
-        reply_markup=arrival_time_kb(),
-    )
+    await _ask_arrival_time_step(message, state)
 
 
 async def _apply_arrival_time(message: Message, state: FSMContext, arrival) -> None:
@@ -545,12 +892,15 @@ async def arrival_pick(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(BookingForm.arrival_time)
 async def set_arrival_time(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     arrival = parse_time(message.text or "")
     if arrival is None:
         await message.answer(
             "Не разобрал время. Выберите кнопку или напишите ЧЧ:ММ, например: 19:30.",
             reply_markup=arrival_time_kb(),
         )
+        await message.answer("Чтобы исправить даты — «Вернуться назад».", reply_markup=_back_reply_kb())
         return
     await _apply_arrival_time(message, state, arrival)
 
@@ -582,13 +932,7 @@ async def consent_no(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 async def _start_dates(message: Message, state: FSMContext) -> None:
-    today = date.today()
-    await state.set_state(BookingForm.dates)
-    await message.answer(
-        dates_prompt(),
-        reply_markup=_calendar_kb(year=today.year, month=today.month),
-        parse_mode="HTML",
-    )
+    await _ask_boarding_dates(message, state)
 
 
 @router.message(BookingForm.contact, F.contact)
@@ -633,6 +977,8 @@ async def _ask_booking_kind(message: Message, state: FSMContext) -> None:
 
 @router.message(BookingForm.booking_kind)
 async def set_booking_kind(message: Message, state: FSMContext, assets_dir: Path) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     text = (message.text or "").strip().lower()
     if "передержк" in text:
         await state.update_data(service_only=False)
@@ -1162,6 +1508,8 @@ async def cal_day(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(BookingForm.dates)
 async def set_dates(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     parsed = parse_dates(message.text or "")
     if not parsed:
         today = date.today()
@@ -1190,6 +1538,8 @@ async def set_dates(message: Message, state: FSMContext) -> None:
 
 @router.message(BookingForm.pet_kind)
 async def set_pet_kind(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     data = await state.get_data()
     category = data.get("service_category")
     kind = KIND_MAP.get((message.text or "").strip().lower())
@@ -1215,55 +1565,27 @@ async def set_pet_kind(message: Message, state: FSMContext) -> None:
         await message.answer("Выберите вариант с клавиатуры.", reply_markup=markup)
         return
     await state.update_data(draft_kind=kind.value)
-    await state.set_state(BookingForm.pet_name)
-    if data.get("service_only"):
-        note = ""
-    elif kind in CAGE_PET_KINDS:
-        note = (
-            " Для птиц, грызунов и хорьков нужна клетка. "
-            "В одной клетке — +100 ₽/сутки на каждого следующего; "
-            "в разных клетках — скидка 50% на второго и следующих."
-        )
-    elif kind == PetKind.DOG:
-        note = (
-            "\n\n‼️Для собак просим привезти: корм, амуницию, ветпаспорт, "
-            "(по желанию: средства гигиены, любимые игрушки....)"
-        )
-    elif kind == PetKind.CAT:
-        note = (
-            "\n\n‼️ Для кошек с собой просим привезти: ветпаспорт, привычный корм, "
-            "лоток с наполнителем, миски и любимые вещи питомца, по необходимости шампунь "
-            "или средство для медухода или витамины ( всё необходимое)"
-        )
-    else:
-        note = ""
-    await message.answer("Кличка питомца?" + note)
+    await _ask_pet_name_step(message, state)
 
 
 @router.message(BookingForm.pet_name)
 async def set_pet_name(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     name = (message.text or "").strip()
     if len(name) < 1:
-        await message.answer("Введите кличку.")
+        await message.answer("Введите кличку.", reply_markup=_back_reply_kb())
         return
     await state.update_data(draft_name=name)
     data = await state.get_data()
     kind = PetKind(data["draft_kind"])
     if kind == PetKind.OTHER:
-        await state.set_state(BookingForm.pet_breed)
-        await message.answer(
-            "Напишите, кто это за питомец (например: хорёк, шиншилла, енот):",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await _ask_pet_breed_step(message, state)
         return
     if kind not in {PetKind.DOG, PetKind.CAT}:
         await _store_current_pet(message, state)
         return
-    await state.set_state(BookingForm.pet_breed)
-    await message.answer(
-        "Какая порода? Если порода неизвестна или питомец — метис, нажмите «Нет».",
-        reply_markup=no_kb(),
-    )
+    await _ask_pet_breed_step(message, state)
 
 
 async def _store_current_pet(
@@ -1326,6 +1648,8 @@ async def _store_current_pet(
 
 @router.message(BookingForm.pet_breed)
 async def set_pet_breed(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     text = (message.text or "").strip()
     data = await state.get_data()
     if data.get("draft_kind") == PetKind.OTHER.value:
@@ -1346,29 +1670,25 @@ async def set_pet_breed(message: Message, state: FSMContext) -> None:
     if data.get("service_only") and data.get("service_category") == "grooming":
         await _ask_pet_age(message, state)
         return
-    await state.set_state(BookingForm.pet_sex)
-    await message.answer(
-        "Пол питомца?",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]],
-            resize_keyboard=True,
-        ),
-    )
+    await _ask_pet_sex_step(message, state)
 
 
 @router.message(BookingForm.pet_sex)
 async def set_pet_sex(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     value = (message.text or "").strip().lower()
     if value not in {"мужской", "женский"}:
-        await message.answer("Выберите пол: Мужской или Женский.")
+        await message.answer("Выберите пол: Мужской или Женский.", reply_markup=sex_kb())
         return
     await state.update_data(draft_sex=value)
-    await state.set_state(BookingForm.pet_neutered)
-    await message.answer("Питомец кастрирован / стерилизована?", reply_markup=yes_no_kb())
+    await _ask_pet_neutered_step(message, state)
 
 
 @router.message(BookingForm.pet_neutered)
 async def set_pet_neutered(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     value = parse_yes(message.text or "")
     if value is None:
         await message.answer("Выберите Да или Нет.", reply_markup=yes_no_kb())
@@ -1377,17 +1697,15 @@ async def set_pet_neutered(message: Message, state: FSMContext) -> None:
     await state.update_data(draft_neutered=value, draft_heat=False)
     data = await state.get_data()
     if data.get("draft_sex") == "женский" and value is False:
-        await state.set_state(BookingForm.pet_heat)
-        await message.answer(
-            "Есть ли сейчас течка или ожидается в период оказания услуги?" if data.get("service_only") else "Есть ли сейчас течка или ожидается во время размещения?",
-            reply_markup=yes_no_kb(),
-        )
+        await _ask_pet_heat_step(message, state)
         return
     await _ask_pet_age(message, state)
 
 
 @router.message(BookingForm.pet_heat)
 async def set_pet_heat(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     data = await state.get_data()
     if data.get("draft_neutered") is True:
         await state.update_data(draft_heat=False)
@@ -1408,12 +1726,14 @@ async def _ask_pet_age(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Сколько питомцу лет и месяцев? Например: «2 года 3 месяца» или «8 месяцев». "
         "Если меньше месяца, напишите число недель.",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=_back_reply_kb(),
     )
 
 
 @router.message(BookingForm.pet_age)
 async def set_pet_age(message: Message, state: FSMContext, llm: LlmAdapter) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     raw = (message.text or "").strip()
     age = None
     try:
@@ -1425,7 +1745,8 @@ async def set_pet_age(message: Message, state: FSMContext, llm: LlmAdapter) -> N
     if age is None:
         await message.answer(
             "Не удалось однозначно понять возраст. Напишите, например: «2 года 3 месяца» "
-            "или точное число месяцев."
+            "или точное число месяцев.",
+            reply_markup=_back_reply_kb(),
         )
         return
     await state.update_data(draft_age_candidate=age)
@@ -1436,6 +1757,19 @@ async def set_pet_age(message: Message, state: FSMContext, llm: LlmAdapter) -> N
     )
 
 
+@router.message(BookingForm.pet_age_review)
+@router.message(BookingForm.pet_behavior_review)
+@router.message(BookingForm.pet_health_review)
+async def review_step_text(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
+    await message.answer(
+        "Подтвердите или исправьте ответ кнопками под предыдущим сообщением.\n"
+        "Или нажмите «Вернуться назад», чтобы изменить прошлый шаг.",
+        reply_markup=_back_reply_kb(),
+    )
+
+
 @router.callback_query(BookingForm.pet_age_review, F.data.startswith("review:age:"))
 async def review_pet_age(callback: CallbackQuery, state: FSMContext) -> None:
     action = (callback.data or "").split(":")[-1]
@@ -1443,33 +1777,36 @@ async def review_pet_age(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     if action != "yes":
         await state.set_state(BookingForm.pet_age)
-        await callback.message.answer("Напишите точный возраст ещё раз, например «18 месяцев».")
+        await callback.message.answer(
+            "Напишите точный возраст ещё раз, например «18 месяцев».",
+            reply_markup=_back_reply_kb(),
+        )
         return
     data = await state.get_data()
     age = data.get("draft_age_candidate")
     if age is None:
         await state.set_state(BookingForm.pet_age)
-        await callback.message.answer("Напишите возраст ещё раз.")
+        await callback.message.answer("Напишите возраст ещё раз.", reply_markup=_back_reply_kb())
         return
     await state.update_data(draft_age_months=age, draft_age_candidate=None)
     data = await state.get_data()
     if data.get("draft_kind") in {PetKind.DOG.value, PetKind.CAT.value}:
-        await state.set_state(BookingForm.pet_weight)
-        await callback.message.answer("Вес питомца в кг (число)?")
+        await _ask_pet_weight_step(callback.message, state)
     else:
         await state.update_data(draft_weight=None)
-        await state.set_state(BookingForm.pet_vaccinated)
-        await callback.message.answer("Есть действующая вакцинация?", reply_markup=yes_no_kb())
+        await _ask_pet_vaccinated_step(callback.message, state)
 
 
 @router.message(BookingForm.pet_weight)
 async def set_pet_weight(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     try:
         weight = float((message.text or "").replace(",", ".").strip())
         if weight <= 0 or weight > 120:
             raise ValueError
     except ValueError:
-        await message.answer("Введите вес числом, например 8.5")
+        await message.answer("Введите вес числом, например 8.5", reply_markup=_back_reply_kb())
         return
     await state.update_data(draft_weight=weight)
     data = await state.get_data()
@@ -1477,8 +1814,7 @@ async def set_pet_weight(message: Message, state: FSMContext) -> None:
         await state.update_data(grooming_index=0, draft_grooming_answers={}, draft_grooming_reference=None)
         await _ask_grooming_question(message, state)
         return
-    await state.set_state(BookingForm.pet_vaccinated)
-    await message.answer("Есть действующая вакцинация?", reply_markup=yes_no_kb())
+    await _ask_pet_vaccinated_step(message, state)
 
 
 def _summary_parts(text: str) -> list[str]:
@@ -1519,6 +1855,8 @@ async def grooming_reference(message: Message, state: FSMContext) -> None:
 
 @router.message(BookingForm.grooming_question)
 async def set_grooming_answer(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     data = await state.get_data()
     index = data.get("grooming_index", 0)
     key = GROOMING_QUESTIONS[index][0]
@@ -1548,31 +1886,26 @@ async def set_grooming_answer(message: Message, state: FSMContext) -> None:
 
 @router.message(BookingForm.pet_vaccinated)
 async def set_vaccinated(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     val = parse_yes(message.text or "")
     if val is None:
         await message.answer("Ответьте «Да» или «Нет».", reply_markup=yes_no_kb())
         return
     await state.update_data(draft_vaccinated=val)
-    await state.set_state(BookingForm.pet_parasite)
-    await message.answer("Обработка от паразитов сделана?", reply_markup=yes_no_kb())
+    await _ask_pet_parasite_step(message, state)
 
 
 @router.message(BookingForm.pet_parasite)
 async def set_parasite(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     val = parse_yes(message.text or "")
     if val is None:
         await message.answer("Ответьте «Да» или «Нет».", reply_markup=yes_no_kb())
         return
-    await state.update_data(draft_parasite=val)
-    await state.set_state(BookingForm.pet_behavior)
-    data = await state.get_data()
-    kind = PetKind(data["draft_kind"])
-    await state.update_data(draft_behavior_selected=[])
-    await message.answer(
-        "Расскажите обычным текстом об особенностях поведения и ухода — например, «боится людей, но не агрессивен». "
-        "Можно также выбрать несколько пунктов кнопками. Если особенностей нет, нажмите «Особенностей нет».",
-        reply_markup=behavior_kb(kind),
-    )
+    await state.update_data(draft_parasite=val, draft_behavior_selected=[])
+    await _ask_pet_behavior_step(message, state)
 
 
 async def _finish_behavior(message: Message, state: FSMContext) -> None:
@@ -1621,6 +1954,8 @@ async def toggle_behavior(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(BookingForm.pet_behavior)
 async def set_behavior_text(message: Message, state: FSMContext, llm: LlmAdapter) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     raw = (message.text or "").strip()
     data = await state.get_data()
     kind = PetKind(data["draft_kind"])
@@ -1671,6 +2006,8 @@ async def review_behavior(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(BookingForm.pet_health)
 async def set_health(message: Message, state: FSMContext, llm: LlmAdapter) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     text = (message.text or "").strip()
     health = None if text.lower() in {"нет", "-"} else text
     if not text:
@@ -1779,6 +2116,8 @@ async def passport_photo(message: Message, state: FSMContext) -> None:
 
 @router.message(BookingForm.pet_passport)
 async def passport_done(message: Message, state: FSMContext) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     text = (message.text or "").strip().lower()
     if text not in {"готово", "далее", "ok", "ок", "без фото", "пропустить"}:
         await message.answer(
@@ -1813,6 +2152,8 @@ async def add_another(
     booking_service: BookingService,
     assets_dir: Path,
 ) -> None:
+    if _is_back_text(message.text) and await _client_step_back(message, state):
+        return
     text = (message.text or "").strip().lower()
     if "добавить" in text:
         data = await state.get_data()
